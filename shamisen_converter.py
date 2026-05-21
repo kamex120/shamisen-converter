@@ -6,8 +6,6 @@ shamisen_converter.py
 
 import yaml
 from music21 import converter, note, chord
-from xml.etree.ElementTree import Element, SubElement, tostring
-from xml.dom import minidom
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -174,49 +172,42 @@ STRING_LABEL = {
     "ichi_no_ito": "一",
 }
 
-def to_intermediate_xml(result: ConversionResult) -> str:
-    """変換結果を中間XMLとして出力する"""
+def to_intermediate_yaml(result: ConversionResult) -> str:
+    """変換結果を中間YAMLとして出力する"""
 
-    root = Element("ShamisenScore")
-    root.set("tuning", result.tuning)
-    root.set("style", "bunkafu")
-
-    # 警告セクション
+    data: dict = {
+        "tuning": result.tuning,
+        "style": "bunkafu",
+    }
     if result.warnings:
-        warnings_el = SubElement(root, "Warnings")
-        for w in result.warnings:
-            warning_el = SubElement(warnings_el, "Warning")
-            warning_el.text = w
+        data["warnings"] = result.warnings
 
-    # 音符セクション
-    notes_el = SubElement(root, "Notes")
+    notes = []
     for sn in result.notes:
         if sn.note_name == "rest":
-            note_el = SubElement(notes_el, "Rest")
-            note_el.set("duration", str(sn.duration))
-            note_el.set("offset", str(sn.offset))
+            notes.append({"type": "rest", "offset": sn.offset, "duration": sn.duration})
         else:
-            note_el = SubElement(notes_el, "Note")
-            note_el.set("offset", str(sn.offset))
-            note_el.set("duration", str(sn.duration))
-            note_el.set("original_note", sn.note_name)
-            note_el.set("original_midi", str(sn.midi))
-
+            entry: dict = {
+                "type": "note",
+                "offset": sn.offset,
+                "duration": sn.duration,
+                "note": sn.note_name,
+                "midi": sn.midi,
+            }
             if sn.out_of_range:
-                note_el.set("out_of_range", "true")
-                note_el.set("status", "unresolved")
+                entry["out_of_range"] = True
+                entry["status"] = "unresolved"
             else:
-                note_el.set("string", STRING_LABEL.get(sn.string, sn.string))
-                note_el.set("string_key", sn.string)
-                note_el.set("position", str(sn.position))
-                note_el.set("status", "ok")
-
+                entry["string"] = STRING_LABEL.get(sn.string, sn.string)
+                entry["string_key"] = sn.string
+                entry["position"] = sn.position
+                entry["status"] = "ok"
             if sn.warning:
-                note_el.set("warning", sn.warning)
+                entry["warning"] = sn.warning
+            notes.append(entry)
 
-    # 整形して返す
-    raw = tostring(root, encoding="unicode")
-    return minidom.parseString(raw).toprettyxml(indent="  ")
+    data["notes"] = notes
+    return yaml.dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
 
 
 # ===========================
@@ -303,7 +294,7 @@ if __name__ == "__main__":
     # パスは適宜変更
     MUSICXML_PATH = "input.xml"
     MAPPING_PATH  = "shamisen_mapping.yaml"
-    OUTPUT_PATH   = "shamisen_output.xml"
+    OUTPUT_PATH   = "shamisen_output.yaml"
 
     # 調弦選択
     print("調弦を選んでください:")
@@ -327,9 +318,9 @@ if __name__ == "__main__":
     midi_map = build_midi_to_position(mapping, tuning)
     result = resolve_out_of_range(result, midi_map, interactive=True)
 
-    # 中間XML出力
-    xml_str = to_intermediate_xml(result)
+    # 中間YAML出力
+    yaml_str = to_intermediate_yaml(result)
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-        f.write(xml_str)
+        f.write(yaml_str)
 
     print(f"\n✅ 変換完了 → {OUTPUT_PATH}")
