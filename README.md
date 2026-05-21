@@ -8,7 +8,7 @@ Google Colab 上で全工程を実行できる。
 ## 処理の流れ
 
 ```
-PDF → 画像（pdf2image）→ MusicXML（oemer）→ 三味線中間XML（shamisen_converter）
+PDF → MusicXML（Audiveris）→ 三味線中間XML（shamisen_converter）
 ```
 
 ---
@@ -18,11 +18,10 @@ PDF → 画像（pdf2image）→ MusicXML（oemer）→ 三味線中間XML（sha
 - [x] 勘所マッピングYAML作成（本調子・二上り・三下り）
 - [x] 変換エンジン基本実装（`shamisen_converter.py`）
 - [x] 中間XML出力
-- [x] PDF→MusicXML変換（oemer）※精度は要改善
+- [x] PDF→MusicXML変換（Audiveris）
 - [x] Colabノートブック（`shamisen_colab.ipynb`）で全工程を実行可能
 - [ ] 中間XMLから楽譜表示
 - [ ] 手動修正UI
-- [ ] oemerの認識精度改善 or Audiverisへの切り替え
 
 ---
 
@@ -46,18 +45,22 @@ README.md                # このファイル
 ### 手順
 1. [Google Colab](https://colab.research.google.com) を開く
 2. ファイル → ノートブックを開く → GitHub → `kamex120/shamisen-converter` → `shamisen_colab.ipynb`
-3. ランタイムのタイプを **T4 GPU** に変更（ランタイム → ランタイムのタイプを変更）
-4. **セル0**（セットアップ）を実行
+3. **セル0**（セットアップ）を実行
+4. **セル0-b**（Audiveris セットアップ）を実行
 5. **セル1-a** でPDFをアップロード
-6. **セル1-b** でMusicXMLに変換（数分〜）
+6. **セル1-b** でMusicXMLに変換
 7. **セル1-c** で再生して認識精度を確認
 8. **セル2** で調弦を選択
 9. **セル3** で三味線中間XMLに変換・ダウンロード
 
 ### セル0 で行うこと
 - GitHubリポジトリのクローン（2回目以降は `git pull`）
-- 依存ライブラリのインストール（oemer / music21 / pdf2image / onnxruntime-gpu）
-- oemerのモデルウェイトのダウンロード（初回のみ、数分）
+- 依存ライブラリのインストール（music21 / pyyaml）
+
+### セル0-b で行うこと（Audiveris）
+- xvfb のインストール
+- Audiveris 5.10.2 Ubuntu 22.04 .deb のダウンロード・インストール
+- インストール済みの場合はスキップ
 
 ---
 
@@ -143,9 +146,7 @@ README.md                # このファイル
 
 ## 既知の課題・注意点
 
-- **oemerの認識精度**：楽譜の品質・複雑さによって大きく変わる。再生確認（セル1-c）で必ずチェックすること
-- **処理時間**：oemer の推論はGPU使用でも数十秒〜数分かかる
-- **oemerのGPU対応**：`onnxruntime-gpu>=1.18.0` が必要（cuDNN 9 / CUDA 12 対応）
+- **Audiverisの処理時間**：楽譜の複雑さによって変わるが oemer より高速・高精度
 - **勘所マッピング**：仮定値が含まれる。三味線に詳しい人に確認・修正が必要
 - **複数パート（合奏）**：非対応
 
@@ -153,7 +154,6 @@ README.md                # このファイル
 
 ## 今後やること
 
-- [ ] oemerの認識精度改善（Audiverisへの切り替えも検討）
 - [ ] 音域外の音の候補（オクターブ違い）を中間XMLに含める
 - [ ] 同じ音の複数候補（弦の選択肢）を中間XMLに保持する
 - [ ] 手動修正UIの検討
