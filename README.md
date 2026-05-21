@@ -1,15 +1,15 @@
 # 三味線譜変換ツール
 
-五線譜（PDF/MusicXML）を三味線の中間XMLに変換するPythonツール。
-最終的には三味線文化譜として出力することを目指す。
+五線譜（PDF）を三味線の勘所情報付き中間XMLに変換するツール。
+Google Colab 上で全工程を実行できる。
 
 ---
 
-## プロジェクトの目的
+## 処理の流れ
 
-1. 五線譜のPDFをMusicXMLに変換（Audiveris使用）
-2. MusicXMLを三味線の勘所情報を持つ中間XMLに変換
-3. 将来的に中間XMLから文化譜として表示・印刷
+```
+PDF → 画像（pdf2image）→ MusicXML（oemer）→ 三味線中間XML（shamisen_converter）
+```
 
 ---
 
@@ -18,19 +18,46 @@
 - [x] 勘所マッピングYAML作成（本調子・二上り・三下り）
 - [x] 変換エンジン基本実装（`shamisen_converter.py`）
 - [x] 中間XML出力
-- [ ] PDF→MusicXML変換（Audiveris連携）
+- [x] PDF→MusicXML変換（oemer）※精度は要改善
+- [x] Colabノートブック（`shamisen_colab.ipynb`）で全工程を実行可能
 - [ ] 中間XMLから楽譜表示
 - [ ] 手動修正UI
+- [ ] oemerの認識精度改善 or Audiverisへの切り替え
 
 ---
 
 ## ファイル構成
 
 ```
-shamisen_mapping.yaml   # 勘所マッピング定義
-shamisen_converter.py   # 変換エンジン本体
-README.md               # このファイル
+shamisen_mapping.yaml    # 勘所マッピング定義
+shamisen_converter.py    # 変換エンジン本体
+shamisen_colab.ipynb     # Google Colab ノートブック（全工程）
+README.md                # このファイル
 ```
+
+---
+
+## Colabでの使い方
+
+### 前提条件
+- GitHubのPersonal Access Token（`repo` スコープ）
+- Colab Secrets に `GITHUB_TOKEN` として登録済み
+
+### 手順
+1. [Google Colab](https://colab.research.google.com) を開く
+2. ファイル → ノートブックを開く → GitHub → `kamex120/shamisen-converter` → `shamisen_colab.ipynb`
+3. ランタイムのタイプを **T4 GPU** に変更（ランタイム → ランタイムのタイプを変更）
+4. **セル0**（セットアップ）を実行
+5. **セル1-a** でPDFをアップロード
+6. **セル1-b** でMusicXMLに変換（数分〜）
+7. **セル1-c** で再生して認識精度を確認
+8. **セル2** で調弦を選択
+9. **セル3** で三味線中間XMLに変換・ダウンロード
+
+### セル0 で行うこと
+- GitHubリポジトリのクローン（2回目以降は `git pull`）
+- 依存ライブラリのインストール（oemer / music21 / pdf2image / onnxruntime-gpu）
+- oemerのモデルウェイトのダウンロード（初回のみ、数分）
 
 ---
 
@@ -47,7 +74,6 @@ README.md               # このファイル
 ### 弦の優先順位
 - 三の弦を最優先で使う
 - 同じ音が複数の弦で出せる場合は三の弦を選択
-- 手動で修正できるよう、中間XMLに候補情報を保持する（TODO）
 
 ### 音域外の音
 - 警告を出してユーザーに処理を選ばせる
@@ -55,12 +81,6 @@ README.md               # このファイル
 
 ### 和音
 - 三味線は単音楽器のため、和音は最高音のみ使用
-- warningフラグとして中間XMLに記録する
-
-### 出力形式
-- 現時点では中間XML（`shamisen_output.xml`）のみ
-- 最終的な楽譜表示は後回し
-- 奏法記号（はじき・打ち・すり等）は情報として保持するだけでよい
 
 ---
 
@@ -72,20 +92,17 @@ README.md               # このファイル
     <Warning>音域外: C3（MIDI 48）は対応する勘所がありません</Warning>
   </Warnings>
   <Notes>
-    <!-- 通常の音符 -->
     <Note
-      offset="0.0"          <!-- 曲頭からの位置（四分音符単位） -->
-      duration="1.0"        <!-- 音の長さ（四分音符=1.0） -->
-      original_note="D4"    <!-- 元の音名 -->
-      original_midi="62"    <!-- 元のMIDIノート番号 -->
-      string="三"           <!-- 弦（三／二／一） -->
+      offset="0.0"
+      duration="1.0"
+      original_note="D4"
+      original_midi="62"
+      string="三"
       string_key="san_no_ito"
-      position="0"          <!-- 勘所番号（0=開放弦） -->
+      position="0"
       status="ok"
     />
-    <!-- 休符 -->
     <Rest offset="1.0" duration="1.0"/>
-    <!-- 音域外（未解決） -->
     <Note
       offset="2.0"
       duration="1.0"
@@ -122,64 +139,23 @@ README.md               # このファイル
 ### 二上り：二の弦がG4→A4に上がる。他は本調子と同じ
 ### 三下り：三の弦がD4→C4に下がる。他は本調子と同じ
 
-マッピングがおかしければ `shamisen_mapping.yaml` を直接編集する。
-
 ---
 
-## 環境セットアップ（Google Colab）
+## 既知の課題・注意点
 
-```python
-# 必要なライブラリ
-!pip install music21 pyyaml
-
-# Audiveris（PDF→MusicXML変換に必要）
-!apt-get install -y default-jre
-!wget https://github.com/Audiveris/audiveris/releases/download/5.9.0/audiveris-5.9.0.jar
-```
-
----
-
-## 使い方
-
-```python
-# MusicXMLから三味線中間XMLに変換
-from shamisen_converter import convert_musicxml, resolve_out_of_range
-from shamisen_converter import load_mapping, build_midi_to_position, to_intermediate_xml
-
-# 変換実行
-result = convert_musicxml(
-    musicxml_path="input.xml",
-    mapping_path="shamisen_mapping.yaml",
-    tuning="honchoshi"  # "honchoshi" / "niagari" / "sansagari"
-)
-
-# 音域外の処理（インタラクティブ）
-mapping = load_mapping("shamisen_mapping.yaml")
-midi_map = build_midi_to_position(mapping, "honchoshi")
-result = resolve_out_of_range(result, midi_map, interactive=True)
-
-# 中間XML出力
-xml_str = to_intermediate_xml(result)
-with open("shamisen_output.xml", "w") as f:
-    f.write(xml_str)
-```
+- **oemerの認識精度**：楽譜の品質・複雑さによって大きく変わる。再生確認（セル1-c）で必ずチェックすること
+- **処理時間**：oemer の推論はGPU使用でも数十秒〜数分かかる
+- **oemerのGPU対応**：`onnxruntime-gpu>=1.18.0` が必要（cuDNN 9 / CUDA 12 対応）
+- **勘所マッピング**：仮定値が含まれる。三味線に詳しい人に確認・修正が必要
+- **複数パート（合奏）**：非対応
 
 ---
 
 ## 今後やること
 
-- [ ] PDF→MusicXML（Audiveris）をPythonから呼び出す
+- [ ] oemerの認識精度改善（Audiverisへの切り替えも検討）
 - [ ] 音域外の音の候補（オクターブ違い）を中間XMLに含める
 - [ ] 同じ音の複数候補（弦の選択肢）を中間XMLに保持する
 - [ ] 手動修正UIの検討
 - [ ] 中間XMLから文化譜として表示・出力する
 - [ ] 他流派対応（研精会譜・縦譜など）
-
----
-
-## 既知の課題・注意点
-
-- 勘所マッピングは仮定値が含まれる。三味線詳しい人に確認・修正が必要
-- Audiverisの認識精度は楽譜の品質に依存する（手書き譜は苦手）
-- 変換は一意でない場合がある（弦の選択が文脈依存）
-- 複数パート（合奏）には非対応
