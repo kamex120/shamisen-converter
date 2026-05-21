@@ -1,0 +1,151 @@
+# 三味線 勘所マッピング
+# 対象流派: 文化譜（長唄系・最もメジャー）
+# 音名表記: 国際式（C4=中央ド、MIDI=60）
+# 勘所0=開放弦
+# 三の弦優先で変換する
+
+tunings:
+
+  # ===========================
+  # 本調子
+  # ===========================
+  honchoshi:
+    description: "本調子（基本調弦）"
+    san_no_ito:
+      description: "三の弦（最低弦）"
+      open_midi: 62   # D4
+      positions:
+        0:  { note: "D4",  midi: 62 }
+        1:  { note: "E4",  midi: 64 }
+        2:  { note: "F#4", midi: 66 }
+        3:  { note: "G4",  midi: 67 }
+        4:  { note: "A4",  midi: 69 }
+        5:  { note: "B4",  midi: 71 }
+        6:  { note: "C#5", midi: 73 }
+        7:  { note: "D5",  midi: 74 }
+        8:  { note: "E5",  midi: 76 }
+        9:  { note: "F#5", midi: 78 }
+        10: { note: "G5",  midi: 79 }
+
+    ni_no_ito:
+      description: "二の弦（中弦）"
+      open_midi: 67   # G4
+      positions:
+        0:  { note: "G4",  midi: 67 }
+        1:  { note: "A4",  midi: 69 }
+        2:  { note: "B4",  midi: 71 }
+        3:  { note: "C5",  midi: 72 }  # ナチュラル（本調子の特徴）
+        4:  { note: "D5",  midi: 74 }
+        5:  { note: "E5",  midi: 76 }
+        6:  { note: "F#5", midi: 78 }
+        7:  { note: "G5",  midi: 79 }
+
+    ichi_no_ito:
+      description: "一の弦（最高弦）"
+      open_midi: 74   # D5
+      positions:
+        0:  { note: "D5",  midi: 74 }
+        1:  { note: "E5",  midi: 76 }
+        2:  { note: "F#5", midi: 78 }
+        3:  { note: "G5",  midi: 79 }
+        4:  { note: "A5",  midi: 81 }
+
+  # ===========================
+  # 二上り
+  # ===========================
+  niagari:
+    description: "二上り（二の弦をAに上げる）"
+    san_no_ito:
+      description: "三の弦（本調子と同じ）"
+      open_midi: 62   # D4
+      positions:
+        0:  { note: "D4",  midi: 62 }
+        1:  { note: "E4",  midi: 64 }
+        2:  { note: "F#4", midi: 66 }
+        3:  { note: "G4",  midi: 67 }
+        4:  { note: "A4",  midi: 69 }
+        5:  { note: "B4",  midi: 71 }
+        6:  { note: "C#5", midi: 73 }
+        7:  { note: "D5",  midi: 74 }
+        8:  { note: "E5",  midi: 76 }
+        9:  { note: "F#5", midi: 78 }
+        10: { note: "G5",  midi: 79 }
+
+    ni_no_ito:
+      description: "二の弦（GからAに上がる）"
+      open_midi: 69   # A4
+      positions:
+        0:  { note: "A4",  midi: 69 }
+        1:  { note: "B4",  midi: 71 }
+        2:  { note: "C#5", midi: 73 }
+        3:  { note: "D5",  midi: 74 }
+        4:  { note: "E5",  midi: 76 }
+        5:  { note: "F#5", midi: 78 }
+        6:  { note: "G#5", midi: 80 }
+        7:  { note: "A5",  midi: 81 }
+
+    ichi_no_ito:
+      description: "一の弦（本調子と同じ）"
+      open_midi: 74   # D5
+      positions:
+        0:  { note: "D5",  midi: 74 }
+        1:  { note: "E5",  midi: 76 }
+        2:  { note: "F#5", midi: 78 }
+        3:  { note: "G5",  midi: 79 }
+        4:  { note: "A5",  midi: 81 }
+
+  # ===========================
+  # 三下り
+  # ===========================
+  sansagari:
+    description: "三下り（三の弦をCに下げる）"
+    san_no_ito:
+      description: "三の弦（DからCに下がる）"
+      open_midi: 60   # C4
+      positions:
+        0:  { note: "C4",  midi: 60 }
+        1:  { note: "D4",  midi: 62 }
+        2:  { note: "E4",  midi: 64 }
+        3:  { note: "F4",  midi: 65 }
+        4:  { note: "G4",  midi: 67 }
+        5:  { note: "A4",  midi: 69 }
+        6:  { note: "B4",  midi: 71 }
+        7:  { note: "C5",  midi: 72 }
+        8:  { note: "D5",  midi: 74 }
+        9:  { note: "E5",  midi: 76 }
+        10: { note: "F5",  midi: 77 }
+
+    ni_no_ito:
+      description: "二の弦（本調子と同じ）"
+      open_midi: 67   # G4
+      positions:
+        0:  { note: "G4",  midi: 67 }
+        1:  { note: "A4",  midi: 69 }
+        2:  { note: "B4",  midi: 71 }
+        3:  { note: "C5",  midi: 72 }
+        4:  { note: "D5",  midi: 74 }
+        5:  { note: "E5",  midi: 76 }
+        6:  { note: "F#5", midi: 78 }
+        7:  { note: "G5",  midi: 79 }
+
+    ichi_no_ito:
+      description: "一の弦（本調子と同じ）"
+      open_midi: 74   # D5
+      positions:
+        0:  { note: "D5",  midi: 74 }
+        1:  { note: "E5",  midi: 76 }
+        2:  { note: "F#5", midi: 78 }
+        3:  { note: "G5",  midi: 79 }
+        4:  { note: "A5",  midi: 81 }
+
+# ===========================
+# メタ情報
+# ===========================
+meta:
+  version: "0.1"
+  style: "bunkafu"  # 文化譜
+  string_priority:
+    - "san_no_ito"   # 三の弦を最優先
+    - "ni_no_ito"
+    - "ichi_no_ito"
+  out_of_range_policy: "warn_and_ask"  # 音域外は警告してユーザーに選ばせる
