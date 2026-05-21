@@ -8,7 +8,7 @@ Google Colab 上で全工程を実行できる。
 ## 処理の流れ
 
 ```
-PDF → MusicXML（Audiveris）→ 三味線中間XML（shamisen_converter）
+PDF → MusicXML（Audiveris）→ 三味線中間YAML（shamisen_converter）
 ```
 
 ---
@@ -87,35 +87,33 @@ README.md                # このファイル
 
 ---
 
-## 中間XMLの構造
+## 中間YAMLの構造
 
-```xml
-<ShamisenScore tuning="honchoshi" style="bunkafu">
-  <Warnings>
-    <Warning>音域外: C3（MIDI 48）は対応する勘所がありません</Warning>
-  </Warnings>
-  <Notes>
-    <Note
-      offset="0.0"
-      duration="1.0"
-      original_note="D4"
-      original_midi="62"
-      string="三"
-      string_key="san_no_ito"
-      position="0"
-      status="ok"
-    />
-    <Rest offset="1.0" duration="1.0"/>
-    <Note
-      offset="2.0"
-      duration="1.0"
-      original_note="C3"
-      original_midi="48"
-      out_of_range="true"
-      status="unresolved"
-    />
-  </Notes>
-</ShamisenScore>
+```yaml
+tuning: honchoshi
+style: bunkafu
+warnings:
+  - 音域外: C3（MIDI 48）は対応する勘所がありません
+notes:
+  - type: note
+    offset: 0.0
+    duration: 1.0
+    note: D4
+    midi: 62
+    string: 三
+    string_key: san_no_ito
+    position: 0
+    status: ok
+  - type: rest
+    offset: 1.0
+    duration: 1.0
+  - type: note
+    offset: 2.0
+    duration: 1.0
+    note: C3
+    midi: 48
+    out_of_range: true
+    status: unresolved
 ```
 
 ---
