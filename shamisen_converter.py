@@ -1,6 +1,6 @@
 """
 shamisen_converter.py
-五線譜（MusicXML）→ 三味線中間XML変換エンジン
+五線譜（MusicXML）→ 三味線中間YAML変換エンジン
 対象: 文化譜（長唄系）
 """
 
@@ -18,7 +18,7 @@ from typing import Optional
 class ShamisenNote:
     """三味線の1音を表す中間表現"""
     string: Optional[str]       # "san_no_ito" / "ni_no_ito" / "ichi_no_ito" / None
-    position: Optional[int]     # 勘所番号（0=開放）/ None
+    position: Optional[str]     # 勘所ラベル（"0"=開放, "#", "b", "1#" など）/ None
     midi: int                   # 元の音高（MIDIノート番号）
     note_name: str              # 元の音名（例: "D4"）
     duration: float             # 音の長さ（四分音符=1.0）
@@ -46,23 +46,30 @@ def load_mapping(yaml_path: str) -> dict:
 
 def build_midi_to_position(mapping: dict, tuning: str) -> dict:
     """
-    MIDIノート番号 → [(弦名, 勘所番号), ...] の辞書を作る
-    三の弦優先順で並べる
+    MIDIノート番号 → [(弦名, 勘所ラベル), ...] の辞書を作る
+    優先順位: 勘所番号（開放弦からの半音数）が小さい順、同点なら string_priority 順
     """
     tuning_data = mapping["tunings"][tuning]
     priority = mapping["meta"]["string_priority"]
+    string_index = {s: i for i, s in enumerate(priority)}
 
-    midi_map = {}  # midi番号 -> [(弦名, 勘所番号), ...]
-
+    # (semi_offset, string_index, string_name, pos) のリストを構築
+    entries: dict[int, list] = {}
     for string_name in priority:
         string_data = tuning_data[string_name]
+        open_midi = string_data["open_midi"]
         for pos, info in string_data["positions"].items():
             midi = info["midi"]
-            if midi not in midi_map:
-                midi_map[midi] = []
-            midi_map[midi].append((string_name, pos))
+            semi_offset = midi - open_midi
+            entries.setdefault(midi, []).append(
+                (semi_offset, string_index[string_name], string_name, pos)
+            )
 
-    return midi_map
+    # ソートして (string_name, pos) だけ残す
+    return {
+        midi: [(s, p) for _, _, s, p in sorted(opts)]
+        for midi, opts in entries.items()
+    }
 
 
 # ===========================
