@@ -173,10 +173,10 @@ def convert_musicxml(
 # 中間XML出力
 # ===========================
 
-STRING_LABEL = {
-    "san_no_ito": "三",
-    "ni_no_ito":  "二",
-    "ichi_no_ito": "一",
+STRING_NUMBER = {
+    "san_no_ito":  3,
+    "ni_no_ito":   2,
+    "ichi_no_ito": 1,
 }
 
 def to_intermediate_yaml(result: ConversionResult) -> str:
@@ -205,8 +205,7 @@ def to_intermediate_yaml(result: ConversionResult) -> str:
                 entry["out_of_range"] = True
                 entry["status"] = "unresolved"
             else:
-                entry["string"] = STRING_LABEL.get(sn.string, sn.string)
-                entry["string_key"] = sn.string
+                entry["string"] = STRING_NUMBER.get(sn.string, sn.string)
                 entry["position"] = sn.position
                 entry["status"] = "ok"
             if sn.warning:
