@@ -361,13 +361,18 @@ st.divider()
 st.subheader("🎼 MusicXML プレビュー & 再生")
 st.caption("Audiveris の認識結果を確認してください")
 
+# MXL は ZIP 展開して生の XML を OSMD に渡す（xml_source_bytes 確定後に定義）
+xml_for_osmd = unwrap_mxl(xml_source_bytes, xml_source_name)
+xml_b64      = base64.b64encode(xml_for_osmd).decode()
+midi_b64     = xml_to_midi_b64(xml_source_bytes, xml_source_name) or ""
+
 # MusicXML ダウンロード & 外部エディタ案内
 dl_name = xml_source_name if xml_source_name.endswith(".xml") else xml_source_name.replace(".mxl", ".xml")
 col_dl, col_tip = st.columns([1, 3])
 with col_dl:
     st.download_button(
         "📄 MusicXML をダウンロード",
-        data=xml_for_osmd,          # 展開済み XML
+        data=xml_for_osmd,
         file_name=dl_name,
         mime="application/xml",
     )
@@ -378,11 +383,6 @@ with col_tip:
         "おすすめ: **[MuseScore 4](https://musescore.org)**（無料・デスクトップ）"
         " / **[Flat.io](https://flat.io)**（無料・ブラウザ）"
     )
-
-# MXL は ZIP 展開して生の XML を OSMD に渡す
-xml_for_osmd   = unwrap_mxl(xml_source_bytes, xml_source_name)
-xml_b64        = base64.b64encode(xml_for_osmd).decode()
-midi_b64       = xml_to_midi_b64(xml_source_bytes, xml_source_name) or ""
 
 preview_html = f"""<!DOCTYPE html>
 <html lang="ja">
