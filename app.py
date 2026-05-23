@@ -231,18 +231,25 @@ if is_pdf:
         else:
             st.info("白塗りなしで変換します。")
 
-        col_ok, col_reset = st.columns(2)
+        col_ok, col_add, col_reset = st.columns(3)
         with col_ok:
             if st.button("▶ この内容で変換開始", type="primary", use_container_width=True):
                 st.session_state.audiveris_ready = True
                 st.rerun()
-        with col_reset:
-            if st.button("🔄 白塗りをリセット", use_container_width=True):
-                st.session_state.whitout_rects      = []
-                st.session_state.whitout_applied    = False
+        with col_add:
+            if st.button("✏️ 矩形をさらに追加", use_container_width=True):
+                # rects は残したまま、プレビュー状態だけ解除してキャンバスに戻る
+                st.session_state.whitout_applied     = False
                 st.session_state.whitout_preview_png = None
-                st.session_state.pdf_for_audiveris  = None
-                st.session_state.audiveris_ready    = False
+                st.session_state.pdf_for_audiveris   = None
+                st.rerun()
+        with col_reset:
+            if st.button("🔄 白塗りを全リセット", use_container_width=True):
+                st.session_state.whitout_rects       = []
+                st.session_state.whitout_applied     = False
+                st.session_state.whitout_preview_png = None
+                st.session_state.pdf_for_audiveris   = None
+                st.session_state.audiveris_ready     = False
                 st.rerun()
 
         st.stop()
