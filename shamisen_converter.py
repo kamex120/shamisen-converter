@@ -212,7 +212,7 @@ def to_intermediate_yaml(result: ConversionResult) -> str:
     data: dict = {
         "tuning": result.tuning,
         "style": "bunkafu",
-        "transpose": result.transpose,   # 元の楽譜からの転調量（半音単位）
+        "transpose": getattr(result, "transpose", 0),  # 元の楽譜からの転調量（半音単位）
     }
     if result.warnings:
         data["warnings"] = result.warnings
