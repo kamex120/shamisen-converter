@@ -66,28 +66,46 @@ with st.sidebar:
 # Audiveris セットアップ（初回のみ）
 # ===========================
 @st.cache_resource(show_spinner=False)
-def setup_audiveris() -> str | None:
-    """Audiveris を /tmp に展開して実行パスを返す（セッション内で1回だけ実行）"""
+def setup_audiveris() -> tuple[str | None, str | None]:
+    """Audiveris を /tmp に展開。(bin_path, error_msg) を返す"""
     if os.path.isfile(AUDIVERIS_BIN):
-        return AUDIVERIS_BIN
+        return AUDIVERIS_BIN, None
 
     os.makedirs(AUDIVERIS_EXTRACT, exist_ok=True)
     deb_path = "/tmp/audiveris.deb"
 
+    # ── ダウンロード（urllib で wget 不要）──
     try:
-        subprocess.run(
-            ["wget", "-q", "--show-progress", AUDIVERIS_URL, "-O", deb_path],
-            check=True, timeout=300,
-        )
-        subprocess.run(
-            ["dpkg-deb", "--extract", deb_path, AUDIVERIS_EXTRACT],
-            check=True,
-        )
-        os.remove(deb_path)
-        os.chmod(AUDIVERIS_BIN, 0o755)
-        return AUDIVERIS_BIN
+        import urllib.request
+        urllib.request.urlretrieve(AUDIVERIS_URL, deb_path)
     except Exception as e:
-        return None
+        return None, f"ダウンロード失敗: {e}"
+
+    # ── .deb を root なしで展開 ──
+    try:
+        r = subprocess.run(
+            ["dpkg-deb", "--extract", deb_path, AUDIVERIS_EXTRACT],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None, f"展開失敗 (dpkg-deb): {r.stderr}"
+    except FileNotFoundError:
+        return None, "dpkg-deb が見つかりません"
+    except Exception as e:
+        return None, f"展開エラー: {e}"
+    finally:
+        if os.path.exists(deb_path):
+            os.remove(deb_path)
+
+    if not os.path.isfile(AUDIVERIS_BIN):
+        # バイナリのパスが違う場合を探す
+        found = glob.glob(f"{AUDIVERIS_EXTRACT}/**/Audiveris", recursive=True)
+        if found:
+            return None, f"バイナリ位置が異なります: {found[0]}"
+        return None, f"バイナリが見つかりません（展開先: {AUDIVERIS_EXTRACT}）"
+
+    os.chmod(AUDIVERIS_BIN, 0o755)
+    return AUDIVERIS_BIN, None
 
 
 # ===========================
@@ -148,9 +166,10 @@ is_pdf = uploaded.name.lower().endswith(".pdf")
 if is_pdf:
     with st.status("Audiveris をセットアップ中...", expanded=True) as status:
         st.write("初回起動時のみ Audiveris をダウンロードします（約 2 分）")
-        bin_path = setup_audiveris()
+        bin_path, setup_err = setup_audiveris()
         if not bin_path:
-            st.error("Audiveris のセットアップに失敗しました")
+            status.update(label="セットアップ失敗", state="error")
+            st.error(f"Audiveris のセットアップに失敗しました\n\n詳細: {setup_err}")
             st.stop()
         status.update(label="楽譜を認識中...", state="running")
         xml_bytes, err = run_audiveris(file_bytes, uploaded.name, bin_path)
