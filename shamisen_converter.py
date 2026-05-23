@@ -33,6 +33,7 @@ class ConversionResult:
     tuning: str                          # 調弦名
     notes: list[ShamisenNote] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    transpose: int = 0                   # 元の楽譜からの転調量（半音単位、正=上、負=下）
 
 
 # ===========================
@@ -186,6 +187,7 @@ def convert_musicxml(
             # オクターブ上げで改善された場合は採用
             result.notes = result_shifted.notes
             result.warnings = result_shifted.warnings
+            result.transpose = 12
             result.warnings.insert(0,
                 f"⚠️ 音域外が {out_of_range_count} 件あったため、"
                 f"スコア全体を1オクターブ上げて再変換しました（残り音域外: {new_oor} 件）"
@@ -210,6 +212,7 @@ def to_intermediate_yaml(result: ConversionResult) -> str:
     data: dict = {
         "tuning": result.tuning,
         "style": "bunkafu",
+        "transpose": result.transpose,   # 元の楽譜からの転調量（半音単位）
     }
     if result.warnings:
         data["warnings"] = result.warnings
