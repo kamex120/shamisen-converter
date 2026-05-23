@@ -108,16 +108,11 @@ def render_note(note: dict, measure_start: float) -> str:
     elif dur_cls == "dur-16":
         underlines = '<span class="underline"></span><span class="underline"></span>'
 
-    # 延ばし線（二分音符以上: ー の数 = 拍数 - 1）
-    num_ext = max(0, round(dur) - 1)
-    ext_html = f'<span class="ext">{"ー" * num_ext}</span>' if num_ext > 0 else ""
-
     cls = f"note s{string}" + (" oor" if is_oor else "")
 
     return (
         f'<div class="{cls}" style="left:{left_pct:.1f}%;top:{top_pct}%">'
         f'<span class="pos">{position}</span>'
-        f'{ext_html}'
         f'{underlines}'
         f'</div>'
     )
@@ -241,13 +236,6 @@ body {
   width: 100%;
 }
 .note.oor .pos { color: #c00; }
-.note .ext {
-  display: inline;
-  font-size: 16px;
-  font-weight: normal;
-  letter-spacing: -4px;
-  margin-left: 1px;
-}
 
 /* 休符 */
 .rest {
