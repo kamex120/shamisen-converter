@@ -18,10 +18,16 @@ import fitz  # PyMuPDF
 from music21 import pitch as m21pitch
 
 # 白塗りキャンバスコンポーネント（ローカル HTML+JS）
-_whitout_canvas = components.declare_component(
-    "whitout_canvas",
-    path=str(Path(__file__).parent / "whitout_component"),
-)
+try:
+    from streamlit.components.v1 import declare_component as _declare_component
+    _whitout_canvas = _declare_component(
+        "whitout_canvas",
+        path=str(Path(__file__).parent / "whitout_component"),
+    )
+    _CANVAS_AVAILABLE = True
+except Exception:
+    _whitout_canvas = None
+    _CANVAS_AVAILABLE = False
 
 from shamisen_converter import (
     convert_musicxml,
@@ -189,9 +195,35 @@ if is_pdf:
         st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所をドラッグで選択")
 
         saved_rects = st.session_state.get("whitout_rects", [])
-        result = _whitout_canvas(image_src=bg_url, rects=saved_rects, key="wc")
-        if result is not None:
-            st.session_state.whitout_rects = result
+
+        if _CANVAS_AVAILABLE:
+            # ── マウスドラッグ描画キャンバス ──
+            result = _whitout_canvas(image_src=bg_url, rects=saved_rects, key="wc")
+            if result is not None:
+                st.session_state.whitout_rects = result
+        else:
+            # ── フォールバック: 画像表示 + 座標数値入力 ──
+            st.image(img_png, use_container_width=True)
+            st.caption(f"ページサイズ: {Image.open(io.BytesIO(img_png)).size[0]}×{Image.open(io.BytesIO(img_png)).size[1]} px（スケール {CANVAS_SCALE}x）")
+            with st.form("rect_form", clear_on_submit=True):
+                c1, c2, c3, c4 = st.columns(4)
+                x0 = c1.number_input("左 px", 0, 9999, 0, step=10)
+                y0 = c2.number_input("上 px", 0, 9999, 0, step=10)
+                x1 = c3.number_input("右 px", 0, 9999, 100, step=10)
+                y1 = c4.number_input("下 px", 0, 9999, 100, step=10)
+                if st.form_submit_button("➕ 領域を追加"):
+                    if x1 > x0 and y1 > y0:
+                        saved_rects.append([float(x0), float(y0), float(x1), float(y1)])
+                        st.session_state.whitout_rects = saved_rects
+                        st.rerun()
+            if saved_rects:
+                for i, r in enumerate(saved_rects):
+                    cols = st.columns([5, 1])
+                    cols[0].caption(f"{i+1}. ({r[0]:.0f},{r[1]:.0f}) → ({r[2]:.0f},{r[3]:.0f})")
+                    if cols[1].button("✕", key=f"del_{i}"):
+                        saved_rects.pop(i)
+                        st.session_state.whitout_rects = saved_rects
+                        st.rerun()
 
         current_rects = st.session_state.get("whitout_rects", [])
 
