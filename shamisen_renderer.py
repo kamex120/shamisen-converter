@@ -24,7 +24,7 @@ LINE_TOP = {
     3: 20,   # 三の糸 (san)  — 上の線
 }
 
-STRING_MARK = {1: "|", 2: "||", 3: "|||"}
+# 指記号（|=人差し指, ||=中指, |||=薬指）は指情報がないため非表示
 
 TUNING_LABEL = {
     "honchoshi": "本調子",
@@ -76,38 +76,30 @@ def group_into_measures(notes: list, beats: int = BEATS_PER_MEASURE) -> list:
 # HTML パーツ生成
 # ===========================
 
-def render_note(note: dict, measure_start: float, prev_string: int) -> tuple[str, int]:
-    """
-    1音のHTMLを返す。(html, new_prev_string)
-    prev_string: 直前の弦番号（弦記号表示判定用）
-    """
+def render_note(note: dict, measure_start: float) -> str:
+    """1音のHTMLを返す"""
     offset_in = note["offset"] - measure_start
     left_pct  = offset_in / BEATS_PER_MEASURE * 100
     dur       = note.get("duration", 1.0)
     dur_cls   = duration_class(dur)
 
     if note.get("type") == "rest":
-        # 休符: 中の線（二の糸位置）に ● を置く
-        dur_span = f'<span class="underline"></span>' * (1 if dur <= 0.5 else 0)
+        # 休符: 二の糸線上に ●
+        underlines = ""
         if dur <= 0.25:
-            dur_span = '<span class="underline"></span><span class="underline"></span>'
+            underlines = '<span class="underline"></span><span class="underline"></span>'
+        elif dur <= 0.5:
+            underlines = '<span class="underline"></span>'
         html = (
-            f'<div class="rest {dur_cls}" style="left:{left_pct:.1f}%">'
-            f'●{dur_span}</div>'
+            f'<div class="rest" style="left:{left_pct:.1f}%">'
+            f'●{underlines}</div>'
         )
-        return html, prev_string
+        return html
 
     string   = note.get("string", 2)
     position = str(note.get("position", "0"))
     top_pct  = LINE_TOP.get(string, 50)
     is_oor   = note.get("status") == "unresolved"
-
-    # 弦記号: 弦が変わったとき、または最初の音
-    show_mark = (string != prev_string)
-    mark_html = (
-        f'<span class="string-mark">{STRING_MARK[string]}</span>'
-        if show_mark else ''
-    )
 
     # 下線（音価）
     underlines = ""
@@ -118,22 +110,18 @@ def render_note(note: dict, measure_start: float, prev_string: int) -> tuple[str
 
     cls = f"note s{string}" + (" oor" if is_oor else "")
 
-    html = (
+    return (
         f'<div class="{cls}" style="left:{left_pct:.1f}%;top:{top_pct}%">'
-        f'{mark_html}'
         f'<span class="pos">{position}</span>'
         f'{underlines}'
         f'</div>'
     )
-    return html, string
 
 
 def render_measure(measure: dict) -> str:
     notes_html_parts = []
-    prev_string = -1
     for n in sorted(measure["notes"], key=lambda x: x["offset"]):
-        html, prev_string = render_note(n, measure["start"], prev_string)
-        notes_html_parts.append(html)
+        notes_html_parts.append(render_note(n, measure["start"]))
 
     notes_html = "".join(notes_html_parts)
     # 3本目の弦線（一の糸）は疑似要素で描けないためdivで追加
@@ -233,13 +221,6 @@ body {
   transform: translate(-50%, -50%);
   text-align: center;
   line-height: 1;
-}
-.note .string-mark {
-  display: block;
-  font-size: 8px;
-  letter-spacing: -1px;
-  text-align: center;
-  margin-bottom: 1px;
 }
 .note .pos {
   display: block;
