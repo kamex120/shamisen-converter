@@ -1,27 +1,30 @@
 """
 shamisen_renderer.py
 三味線中間YAML → 文化譜HTML レンダラー
-横書き / A4印刷対応
+
+文化譜の仕様:
+  - 3本の横線（下から 一の糸 / 二の糸 / 三の糸）
+  - 数字は対応する弦の線の上に配置
+  - 音価: 下線なし=4分、下線1本=8分、下線2本=16分
+  - 休符: ● (下線で音価を表す)
+  - 弦記号: | / || / ||| を数字の上に表示（弦が変わるとき）
+  - 横書き（左→右）、1行 MEASURES_PER_ROW 小節
 """
 
 import yaml
 
-BEATS_PER_MEASURE = 4   # 4/4拍子
-MEASURES_PER_ROW  = 4   # 1行あたりの小節数
+BEATS_PER_MEASURE = 4
+MEASURES_PER_ROW  = 4
 
-# スタッフ内の縦位置（top %）
-STRING_TOP = {
-    3: 5,   # 三の糸: 上の線より上
-    2: 38,  # 二の糸: 2線の間
-    1: 70,  # 一の糸: 下の線より下
+# スタッフ高さに対する各弦の線の縦位置（%）
+# 下から 一の糸(bottom) / 二の糸(middle) / 三の糸(top)
+LINE_TOP = {
+    1: 80,   # 一の糸 (ichi) — 下の線
+    2: 50,   # 二の糸 (ni)   — 中の線
+    3: 20,   # 三の糸 (san)  — 上の線
 }
 
-# 弦の記号（縦棒を重ねて表現）
-STRING_MARK = {
-    3: "|||",
-    2: "||",
-    1: "|",
-}
+STRING_MARK = {1: "|", 2: "||", 3: "|||"}
 
 TUNING_LABEL = {
     "honchoshi": "本調子",
@@ -31,7 +34,7 @@ TUNING_LABEL = {
 
 
 # ===========================
-# データ読み込み
+# ユーティリティ
 # ===========================
 
 def load_yaml(path: str) -> dict:
@@ -39,27 +42,32 @@ def load_yaml(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def duration_class(dur: float) -> str:
+    """音価 → CSSクラス"""
+    if dur <= 0.25:
+        return "dur-16"
+    if dur <= 0.5:
+        return "dur-8"
+    return ""
+
+
 # ===========================
 # 小節グループ化
 # ===========================
 
 def group_into_measures(notes: list, beats: int = BEATS_PER_MEASURE) -> list:
-    """offset をもとに小節単位にグループ化"""
     all_notes = [n for n in notes if "offset" in n]
     if not all_notes:
         return []
-
     max_end = max(n["offset"] + n.get("duration", 1) for n in all_notes)
     num_measures = int(max_end / beats) + 1
-
     result = []
     for i in range(num_measures):
-        start = i * beats
-        end   = start + beats
+        start = float(i * beats)
         result.append({
             "index": i + 1,
-            "start": float(start),
-            "notes": [n for n in all_notes if start <= n["offset"] < end],
+            "start": start,
+            "notes": [n for n in all_notes if start <= n["offset"] < start + beats],
         })
     return result
 
@@ -68,40 +76,79 @@ def group_into_measures(notes: list, beats: int = BEATS_PER_MEASURE) -> list:
 # HTML パーツ生成
 # ===========================
 
-def render_note(note: dict, measure_start: float) -> str:
-    """1音のHTML片"""
+def render_note(note: dict, measure_start: float, prev_string: int) -> tuple[str, int]:
+    """
+    1音のHTMLを返す。(html, new_prev_string)
+    prev_string: 直前の弦番号（弦記号表示判定用）
+    """
     offset_in = note["offset"] - measure_start
-    left = offset_in / BEATS_PER_MEASURE * 100
+    left_pct  = offset_in / BEATS_PER_MEASURE * 100
+    dur       = note.get("duration", 1.0)
+    dur_cls   = duration_class(dur)
 
     if note.get("type") == "rest":
-        # 休符: 上の線上にドット
-        return (
-            f'<div class="beat-dot" style="left:{left:.1f}%">•</div>'
+        # 休符: 中の線（二の糸位置）に ● を置く
+        dur_span = f'<span class="underline"></span>' * (1 if dur <= 0.5 else 0)
+        if dur <= 0.25:
+            dur_span = '<span class="underline"></span><span class="underline"></span>'
+        html = (
+            f'<div class="rest {dur_cls}" style="left:{left_pct:.1f}%">'
+            f'●{dur_span}</div>'
         )
+        return html, prev_string
 
     string   = note.get("string", 2)
     position = str(note.get("position", "0"))
-    top      = STRING_TOP.get(string, 38)
-    mark     = STRING_MARK.get(string, "")
+    top_pct  = LINE_TOP.get(string, 50)
     is_oor   = note.get("status") == "unresolved"
 
-    cls = f"note s{string}" + (" oor" if is_oor else "")
-    mark_html = f'<span class="string-mark">{mark}</span>'
-
-    return (
-        f'<div class="{cls}" style="left:{left:.1f}%;top:{top}%">'
-        f'{mark_html}{position}</div>'
+    # 弦記号: 弦が変わったとき、または最初の音
+    show_mark = (string != prev_string)
+    mark_html = (
+        f'<span class="string-mark">{STRING_MARK[string]}</span>'
+        if show_mark else ''
     )
+
+    # 下線（音価）
+    underlines = ""
+    if dur_cls == "dur-8":
+        underlines = '<span class="underline"></span>'
+    elif dur_cls == "dur-16":
+        underlines = '<span class="underline"></span><span class="underline"></span>'
+
+    cls = f"note s{string}" + (" oor" if is_oor else "")
+
+    html = (
+        f'<div class="{cls}" style="left:{left_pct:.1f}%;top:{top_pct}%">'
+        f'{mark_html}'
+        f'<span class="pos">{position}</span>'
+        f'{underlines}'
+        f'</div>'
+    )
+    return html, string
 
 
 def render_measure(measure: dict) -> str:
-    notes_html = "".join(render_note(n, measure["start"]) for n in measure["notes"])
-    return f'<div class="measure"><div class="staff">{notes_html}</div></div>'
+    notes_html_parts = []
+    prev_string = -1
+    for n in sorted(measure["notes"], key=lambda x: x["offset"]):
+        html, prev_string = render_note(n, measure["start"], prev_string)
+        notes_html_parts.append(html)
+
+    notes_html = "".join(notes_html_parts)
+    # 3本目の弦線（一の糸）は疑似要素で描けないためdivで追加
+    return (
+        f'<div class="measure">'
+        f'<div class="staff">'
+        f'<div class="line-bottom"></div>'
+        f'{notes_html}'
+        f'</div></div>'
+    )
 
 
 def render_row(measures: list) -> str:
-    first_mn   = measures[0]["index"]
-    meas_html  = "".join(render_measure(m) for m in measures)
+    first_mn  = measures[0]["index"]
+    meas_html = "".join(render_measure(m) for m in measures)
     return (
         f'<div class="system">'
         f'<div class="measure-number">{first_mn}</div>'
@@ -111,7 +158,7 @@ def render_row(measures: list) -> str:
 
 
 # ===========================
-# メインHTML生成
+# CSS
 # ===========================
 
 CSS = """
@@ -120,25 +167,24 @@ body {
   font-family: "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
   background: #fff; color: #000;
   padding: 20px;
-  font-size: 14px;
 }
 
 /* ヘッダー */
 .score-header { text-align: center; margin-bottom: 20px; position: relative; }
 .score-header h1 { font-size: 26px; letter-spacing: 0.1em; }
-.attribution { position: absolute; right: 0; top: 0; font-size: 14px; }
+.attribution { position: absolute; right: 0; top: 4px; font-size: 14px; }
 .meta { font-size: 12px; text-align: left; margin-top: 6px; color: #444; }
 
 /* 行（システム） */
 .system {
   display: flex;
-  align-items: flex-start;
-  margin-bottom: 44px;
+  align-items: stretch;
+  margin-bottom: 40px;
 }
 .measure-number {
   width: 24px;
   font-size: 11px;
-  padding-top: 30px;
+  padding-top: 24px;
   flex-shrink: 0;
   color: #555;
 }
@@ -155,49 +201,75 @@ body {
   border-right: 1px solid #000;
 }
 
-/* スタッフ（2本線） */
+/* スタッフ（3本線） */
 .staff {
   position: relative;
-  height: 72px;
-  margin: 20px 4px 4px;
+  height: 100px;
+  margin: 12px 4px 8px;
 }
-.staff::before, .staff::after {
+
+/* 3本の弦線を疑似要素 + 追加divで描画 */
+.staff::before,
+.staff::after {
   content: '';
   position: absolute;
   left: 0; right: 0;
   height: 1px;
   background: #000;
 }
-.staff::before { top: 33%; }
-.staff::after  { top: 66%; }
+.staff::before { top: 20%; }  /* 三の糸 */
+.staff::after  { top: 50%; }  /* 二の糸 */
+.staff .line-bottom {
+  position: absolute;
+  left: 0; right: 0;
+  top: 80%;
+  height: 1px;
+  background: #000;
+}
 
 /* 音符 */
 .note {
   position: absolute;
-  transform: translateX(-50%);
-  font-size: 17px;
-  font-weight: bold;
-  line-height: 1;
+  transform: translate(-50%, -50%);
   text-align: center;
-  white-space: nowrap;
+  line-height: 1;
 }
 .note .string-mark {
   display: block;
-  font-size: 7px;
-  font-weight: normal;
+  font-size: 8px;
   letter-spacing: -1px;
   text-align: center;
-  line-height: 1.2;
+  margin-bottom: 1px;
 }
-.note.oor { color: #c00; }
-
-/* 休符ドット */
-.beat-dot {
-  position: absolute;
-  transform: translateX(-50%);
-  top: 33%;
-  font-size: 14px;
+.note .pos {
+  display: block;
+  font-size: 18px;
+  font-weight: bold;
   line-height: 1;
+}
+.note .underline {
+  display: block;
+  height: 1px;
+  background: #000;
+  margin-top: 2px;
+  width: 100%;
+}
+.note.oor .pos { color: #c00; }
+
+/* 休符 */
+.rest {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 16px;
+  font-weight: bold;
+  text-align: center;
+}
+.rest .underline {
+  display: block;
+  height: 1px;
+  background: #000;
+  margin-top: 2px;
 }
 
 /* 警告 */
@@ -209,16 +281,17 @@ body {
   border-radius: 4px;
 }
 
-/* 印刷 */
+/* 印刷設定 */
 @media print {
   body { padding: 0; }
+  .no-print { display: none !important; }
   .system { page-break-inside: avoid; }
   @page { size: A4 portrait; margin: 15mm 12mm; }
 }
 """
 
 PRINT_BTN = """
-<div style="text-align:right; margin-bottom:12px; print-visibility:hidden">
+<div class="no-print" style="text-align:right; margin-bottom:12px;">
   <button onclick="window.print()"
     style="padding:6px 16px; font-size:13px; cursor:pointer;">
     🖨️ 印刷 / PDF保存
@@ -227,18 +300,18 @@ PRINT_BTN = """
 """
 
 
-def render_html(
-    data: dict,
-    title: str = "",
-    attribution: str = "",
-) -> str:
+# ===========================
+# メインHTML生成
+# ===========================
+
+def render_html(data: dict, title: str = "", attribution: str = "") -> str:
     tuning    = data.get("tuning", "")
     transpose = data.get("transpose", 0)
     notes     = data.get("notes", [])
     warnings  = data.get("warnings", [])
 
     measures = group_into_measures(notes)
-    rows     = [measures[i:i+MEASURES_PER_ROW]
+    rows     = [measures[i:i + MEASURES_PER_ROW]
                 for i in range(0, len(measures), MEASURES_PER_ROW)]
 
     tuning_str    = TUNING_LABEL.get(tuning, tuning)
@@ -274,12 +347,8 @@ def render_html(
 </html>"""
 
 
-def save_html(
-    data: dict,
-    output_path: str,
-    title: str = "",
-    attribution: str = "",
-) -> str:
+def save_html(data: dict, output_path: str,
+              title: str = "", attribution: str = "") -> str:
     html = render_html(data, title=title, attribution=attribution)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
