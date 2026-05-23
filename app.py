@@ -18,7 +18,7 @@ import fitz  # PyMuPDF
 from music21 import pitch as m21pitch
 
 # 白塗りキャンバスコンポーネント（ローカル HTML+JS）
-_whitout_canvas = components.v1.declare_component(
+_whitout_canvas = components.declare_component(
     "whitout_canvas",
     path=str(Path(__file__).parent / "whitout_component"),
 )
