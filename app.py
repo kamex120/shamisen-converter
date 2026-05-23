@@ -12,6 +12,7 @@ import os
 import glob
 import subprocess
 import io
+import base64
 from pathlib import Path
 from PIL import Image
 import fitz  # PyMuPDF
@@ -172,11 +173,13 @@ if is_pdf:
     st.subheader("✏️ 白塗り（任意）")
     st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所をドラッグで選択")
 
-    img_png  = pdf_to_png(file_bytes)
+    img_png   = pdf_to_png(file_bytes)
     canvas_bg = Image.open(io.BytesIO(img_png))
+    bg_b64    = base64.b64encode(img_png).decode()
+    bg_url    = f"data:image/png;base64,{bg_b64}"
 
     canvas_result = st_canvas(
-        background_image=canvas_bg,
+        background_image=bg_url,
         drawing_mode="rect",
         fill_color="rgba(255, 255, 255, 0.65)",
         stroke_color="#FF4444",
