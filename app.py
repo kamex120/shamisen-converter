@@ -82,10 +82,12 @@ is_pdf = uploaded.name.lower().endswith(".pdf")
 # ファイルが変わったらセッションをリセット
 file_id = f"{uploaded.name}_{len(file_bytes)}"
 if st.session_state.get("_file_id") != file_id:
-    st.session_state._file_id          = file_id
-    st.session_state.audiveris_ready   = False
-    st.session_state.pdf_for_audiveris = None
-    st.session_state.whitout_rects     = []   # [(x0%,y0%,x1%,y1%), ...]
+    st.session_state._file_id           = file_id
+    st.session_state.audiveris_ready    = False
+    st.session_state.pdf_for_audiveris  = None
+    st.session_state.whitout_rects      = []
+    st.session_state.whitout_applied    = False   # 白塗りプレビュー済みか
+    st.session_state.whitout_preview_png = None   # 白塗り後の PNG bytes
 
 
 # ===========================
@@ -159,53 +161,91 @@ if is_pdf:
         pix = doc[0].get_pixmap(matrix=fitz.Matrix(scale, scale))
         return pix.tobytes("png")
 
-    def apply_whitout(pdf_bytes: bytes, img_rects: list) -> bytes:
-        """img_rects: [[x0,y0,x1,y1], ...] PNG画素座標(CANVAS_SCALE=1.5) → PDF座標変換して白塗り"""
-        if not img_rects:
-            return pdf_bytes
+    def apply_whitout_pdf(pdf_bytes: bytes, img_rects: list) -> bytes:
+        """img_rects: [[x0,y0,x1,y1]] PNG画素座標 → PDF座標変換して白塗り"""
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         for page in doc:
             for r in img_rects:
-                # PNG座標 ÷ CANVAS_SCALE = PDF座標(pt)
                 x0, y0, x1, y1 = (v / CANVAS_SCALE for v in r)
                 page.add_redact_annot(fitz.Rect(x0, y0, x1, y1), fill=(1, 1, 1))
             page.apply_redactions()
         return doc.tobytes()
 
-    # ── 白塗りキャンバス ──
-    st.subheader("✏️ 白塗り（任意）")
-    st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所をドラッグで選択")
+    def whitout_to_png(pdf_bytes: bytes) -> bytes:
+        """白塗り済み PDF の1ページ目を PNG に変換してプレビュー用に返す"""
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(CANVAS_SCALE, CANVAS_SCALE))
+        return pix.tobytes("png")
 
     img_png = pdf_to_png(file_bytes)
     bg_b64  = base64.b64encode(img_png).decode()
     bg_url  = f"data:image/png;base64,{bg_b64}"
 
-    saved_rects = st.session_state.get("whitout_rects", [])
+    # =========================================
+    # ステップ A: 白塗り未適用 → キャンバス表示
+    # =========================================
+    if not st.session_state.get("whitout_applied"):
+        st.subheader("✏️ 白塗り（任意）")
+        st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所をドラッグで選択")
 
-    # カスタムコンポーネントでマウスドラッグ描画 → rects を返す
-    result = _whitout_canvas(
-        image_src=bg_url,
-        rects=saved_rects,
-        key="wc",
-    )
-    if result is not None:
-        st.session_state.whitout_rects = result
+        saved_rects = st.session_state.get("whitout_rects", [])
+        result = _whitout_canvas(image_src=bg_url, rects=saved_rects, key="wc")
+        if result is not None:
+            st.session_state.whitout_rects = result
 
-    current_rects = st.session_state.get("whitout_rects", [])
+        current_rects = st.session_state.get("whitout_rects", [])
 
-    st.divider()
-    col_info, col_btn = st.columns([3, 1])
-    with col_info:
-        if current_rects:
-            st.caption(f"✅ {len(current_rects)} 箇所を白塗り予定")
+        st.divider()
+        col_info, col_apply, col_skip = st.columns([3, 1, 1])
+        with col_info:
+            if current_rects:
+                st.caption(f"✅ {len(current_rects)} 箇所を選択中")
+            else:
+                st.caption("白塗りなし → そのまま変換する場合は「スキップ」")
+        with col_apply:
+            if current_rects and st.button("🖊 白塗りを適用", type="primary", use_container_width=True):
+                processed_pdf = apply_whitout_pdf(file_bytes, current_rects)
+                preview_png   = whitout_to_png(processed_pdf)
+                st.session_state.pdf_for_audiveris  = processed_pdf
+                st.session_state.whitout_preview_png = preview_png
+                st.session_state.whitout_applied     = True
+                st.rerun()
+        with col_skip:
+            if st.button("▶ スキップして変換", use_container_width=True):
+                st.session_state.pdf_for_audiveris = file_bytes
+                st.session_state.whitout_applied   = True
+                st.session_state.whitout_preview_png = None
+                st.rerun()
+
+        st.stop()
+
+    # =========================================
+    # ステップ B: 白塗り適用済み → プレビュー確認
+    # =========================================
+    if not st.session_state.get("audiveris_ready"):
+        st.subheader("🔍 白塗り結果を確認")
+
+        preview_png = st.session_state.get("whitout_preview_png")
+        if preview_png:
+            st.image(preview_png, caption="白塗り適用後のプレビュー", use_container_width=True)
         else:
-            st.caption("白塗りなし（そのまま変換）")
-    with col_btn:
-        if st.button("▶ 変換開始", type="primary", use_container_width=True):
-            processed = apply_whitout(file_bytes, current_rects)
-            st.session_state.pdf_for_audiveris = processed
-            st.session_state.audiveris_ready   = True
-            st.rerun()
+            st.info("白塗りなしで変換します。")
+
+        col_ok, col_reset = st.columns(2)
+        with col_ok:
+            if st.button("▶ この内容で変換開始", type="primary", use_container_width=True):
+                st.session_state.audiveris_ready = True
+                st.rerun()
+        with col_reset:
+            if st.button("🔄 白塗りをリセット", use_container_width=True):
+                st.session_state.whitout_rects      = []
+                st.session_state.whitout_applied    = False
+                st.session_state.whitout_preview_png = None
+                st.session_state.pdf_for_audiveris  = None
+                st.session_state.audiveris_ready    = False
+                st.rerun()
+
+        st.stop()
 
     if not st.session_state.get("audiveris_ready"):
         st.stop()
