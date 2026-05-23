@@ -19,9 +19,9 @@ MEASURES_PER_ROW  = 4
 # スタッフ高さに対する各弦の線の縦位置（%）
 # 下から 一の糸(bottom) / 二の糸(middle) / 三の糸(top)
 LINE_TOP = {
-    1: 80,   # 一の糸 (ichi) — 下の線
-    2: 50,   # 二の糸 (ni)   — 中の線
-    3: 20,   # 三の糸 (san)  — 上の線
+    1: 20,   # ichi_no_ito → 三の糸（上の線）
+    2: 50,   # ni_no_ito   → 二の糸（中の線）
+    3: 80,   # san_no_ito  → 一の糸（下の線）
 }
 
 # 指記号（|=人差し指, ||=中指, |||=薬指）は指情報がないため非表示
@@ -210,8 +210,8 @@ body {
   height: 1px;
   background: #000;
 }
-.staff::before { top: 20%; }  /* 三の糸 */
-.staff::after  { top: 50%; }  /* 二の糸 */
+.staff::before { top: 20%; }  /* 三の糸（上） */
+.staff::after  { top: 50%; }  /* 二の糸（中） */
 .staff .line-bottom {
   position: absolute;
   left: 0; right: 0;
