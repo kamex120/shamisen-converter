@@ -132,7 +132,7 @@ def convert_musicxml(
     result = ConversionResult(tuning=tuning)
 
     # 音符を順番に処理
-    for element in score.flat.notesAndRests:
+    for element in score.flatten().notesAndRests:
         duration = element.duration.quarterLength
         offset = float(element.offset)
 
