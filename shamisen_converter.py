@@ -131,40 +131,65 @@ def convert_musicxml(
     score = converter.parse(musicxml_path)
     result = ConversionResult(tuning=tuning)
 
-    # 音符を順番に処理
-    for element in score.flatten().notesAndRests:
-        duration = element.duration.quarterLength
-        offset = float(element.offset)
+    # 複数パートがある場合は最初のパートのみ使用（三味線は単声楽器）
+    parts = score.parts
+    if len(parts) > 1:
+        result.warnings.append(
+            f"複数パート（{len(parts)}パート）を検出。最初のパートのみ変換します。"
+        )
+        target = parts[0]
+    else:
+        target = score
 
-        if isinstance(element, note.Rest):
-            # 休符
-            result.notes.append(ShamisenNote(
-                string=None,
-                position=None,
-                midi=-1,
-                note_name="rest",
-                duration=duration,
-                offset=offset,
-            ))
+    # 音符を順番に処理（内部関数）
+    def _parse_notes(target_score, result_obj):
+        result_obj.notes.clear()
+        result_obj.warnings = [w for w in result_obj.warnings
+                               if "音域外" not in w]  # 音域外警告はリセット
+        for element in target_score.flatten().notesAndRests:
+            duration = element.duration.quarterLength
+            offset = float(element.offset)
+            if isinstance(element, note.Rest):
+                result_obj.notes.append(ShamisenNote(
+                    string=None, position=None, midi=-1,
+                    note_name="rest", duration=duration, offset=offset,
+                ))
+            elif isinstance(element, note.Note):
+                midi_num = element.pitch.midi
+                note_name = element.pitch.nameWithOctave
+                sn = convert_note(midi_num, note_name, duration, offset, midi_map)
+                result_obj.notes.append(sn)
+                if sn.warning:
+                    result_obj.warnings.append(sn.warning)
+            elif isinstance(element, chord.Chord):
+                highest = max(element.pitches, key=lambda p: p.midi)
+                sn = convert_note(highest.midi, highest.nameWithOctave,
+                                  duration, offset, midi_map)
+                sn.warning = (sn.warning or "") + "（和音→最高音を使用）"
+                result_obj.notes.append(sn)
+                if sn.warning:
+                    result_obj.warnings.append(sn.warning)
 
-        elif isinstance(element, note.Note):
-            midi_num = element.pitch.midi
-            note_name = element.pitch.nameWithOctave
-            sn = convert_note(midi_num, note_name, duration, offset, midi_map)
-            result.notes.append(sn)
-            if sn.warning:
-                result.warnings.append(sn.warning)
+    # 1回目の変換
+    _parse_notes(target, result)
 
-        elif isinstance(element, chord.Chord):
-            # 和音→最高音だけ使う（三味線は単音楽器）
-            highest = max(element.pitches, key=lambda p: p.midi)
-            midi_num = highest.midi
-            note_name = highest.nameWithOctave
-            sn = convert_note(midi_num, note_name, duration, offset, midi_map)
-            sn.warning = (sn.warning or "") + "（和音→最高音を使用）"
-            result.notes.append(sn)
-            if sn.warning:
-                result.warnings.append(sn.warning)
+    # 音域外が残る場合、全体を1オクターブ上げて再変換
+    out_of_range_count = sum(1 for n in result.notes if n.out_of_range)
+    if out_of_range_count > 0:
+        target_shifted = target.transpose(12)
+        result_shifted = ConversionResult(tuning=tuning)
+        result_shifted.warnings = list(result.warnings)
+        _parse_notes(target_shifted, result_shifted)
+
+        new_oor = sum(1 for n in result_shifted.notes if n.out_of_range)
+        if new_oor < out_of_range_count:
+            # オクターブ上げで改善された場合は採用
+            result.notes = result_shifted.notes
+            result.warnings = result_shifted.warnings
+            result.warnings.insert(0,
+                f"⚠️ 音域外が {out_of_range_count} 件あったため、"
+                f"スコア全体を1オクターブ上げて再変換しました（残り音域外: {new_oor} 件）"
+            )
 
     return result
 
