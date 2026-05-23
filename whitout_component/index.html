@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: sans-serif; background: #fafafa; overflow-x: hidden; }
+#toolbar {
+  padding: 6px 10px;
+  background: #fff;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+button {
+  padding: 4px 12px;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 12px;
+}
+button:hover { background: #f0f0f0; }
+#info { color: #555; margin-left: 4px; }
+#wrap { overflow: auto; line-height: 0; }
+canvas { display: block; cursor: crosshair; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button onclick="undo()">↩ 一つ戻す</button>
+  <button onclick="clearAll()" style="color:#c00; border-color:#c00;">🗑 全消去</button>
+  <span id="info">ドラッグで白塗り範囲を選択してください</span>
+</div>
+<div id="wrap"><canvas id="cv"></canvas></div>
+
+<script>
+// ==============================
+// Streamlit component protocol
+// ==============================
+function sendReady() {
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 },
+    "*"
+  );
+}
+function sendValue(val) {
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setComponentValue", value: val, dataType: "json" },
+    "*"
+  );
+}
+function setHeight(h) {
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h },
+    "*"
+  );
+}
+
+// ==============================
+// State
+// ==============================
+let rects = [];       // [{x0,y0,x1,y1} in original-image pixels]
+let img   = null;
+let imgSrc = "";
+let dragging = false;
+let sx = 0, sy = 0, ex = 0, ey = 0;
+// scale from canvas-display pixels → original-image pixels
+let scaleX = 1, scaleY = 1;
+
+// ==============================
+// Streamlit → component
+// ==============================
+window.addEventListener("message", (e) => {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  const args = e.data.args || {};
+
+  // Load image only when src changes
+  if (args.image_src && args.image_src !== imgSrc) {
+    imgSrc = args.image_src;
+    img = new Image();
+    img.onload = () => { setupCanvas(); draw(); };
+    img.src = imgSrc;
+  }
+
+  // Restore saved rects (e.g. after Streamlit rerun)
+  if (args.rects && Array.isArray(args.rects)) {
+    rects = args.rects.map(r => ({x0:r[0], y0:r[1], x1:r[2], y1:r[3]}));
+  }
+
+  if (img && img.complete) draw();
+});
+
+// ==============================
+// Canvas setup
+// ==============================
+const cv  = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+
+function setupCanvas() {
+  const maxW = Math.min(window.innerWidth - 4, 900);
+  const scale = Math.min(1.0, maxW / img.naturalWidth);
+  cv.width  = Math.round(img.naturalWidth  * scale);
+  cv.height = Math.round(img.naturalHeight * scale);
+  scaleX = img.naturalWidth  / cv.width;
+  scaleY = img.naturalHeight / cv.height;
+  setHeight(cv.height + 44);  // canvas + toolbar
+}
+
+window.addEventListener("resize", () => {
+  if (img && img.complete) { setupCanvas(); draw(); }
+});
+
+// ==============================
+// Drawing
+// ==============================
+function draw() {
+  if (!img) return;
+  ctx.drawImage(img, 0, 0, cv.width, cv.height);
+
+  rects.forEach(r => {
+    const x = r.x0 / scaleX, y = r.y0 / scaleY;
+    const w = (r.x1 - r.x0) / scaleX, h = (r.y1 - r.y0) / scaleY;
+    ctx.fillStyle   = "rgba(255,255,255,0.75)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "#FF4444";
+    ctx.lineWidth   = 2;
+    ctx.strokeRect(x, y, w, h);
+  });
+
+  if (dragging) {
+    const x = Math.min(sx, ex), y = Math.min(sy, ey);
+    const w = Math.abs(ex - sx), h = Math.abs(ey - sy);
+    ctx.fillStyle   = "rgba(255,255,255,0.5)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "#FF4444";
+    ctx.lineWidth   = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+  }
+
+  const info = document.getElementById("info");
+  info.textContent = rects.length > 0
+    ? `✅ ${rects.length} 箇所を白塗り予定`
+    : "ドラッグで白塗り範囲を選択してください";
+}
+
+// ==============================
+// Mouse events
+// ==============================
+function canvasPos(e) {
+  const rect = cv.getBoundingClientRect();
+  const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+  return [Math.max(0, Math.min(cv.width,  cx)),
+          Math.max(0, Math.min(cv.height, cy))];
+}
+
+cv.addEventListener("mousedown",  e => { [sx, sy] = canvasPos(e); ex=sx; ey=sy; dragging=true; });
+cv.addEventListener("mousemove",  e => { if (!dragging) return; [ex, ey] = canvasPos(e); draw(); });
+cv.addEventListener("mouseleave", e => { if (!dragging) return; [ex, ey] = canvasPos(e); finishDrag(); });
+cv.addEventListener("mouseup",    e => { if (!dragging) return; [ex, ey] = canvasPos(e); finishDrag(); });
+
+cv.addEventListener("touchstart",  e => { e.preventDefault(); [sx, sy] = canvasPos(e); ex=sx; ey=sy; dragging=true; });
+cv.addEventListener("touchmove",   e => { e.preventDefault(); if (!dragging) return; [ex, ey] = canvasPos(e); draw(); });
+cv.addEventListener("touchend",    e => { e.preventDefault(); if (!dragging) return; finishDrag(); });
+
+function finishDrag() {
+  dragging = false;
+  const x0 = Math.min(sx, ex) * scaleX;
+  const y0 = Math.min(sy, ey) * scaleY;
+  const x1 = Math.max(sx, ex) * scaleX;
+  const y1 = Math.max(sy, ey) * scaleY;
+  if ((x1 - x0) > 5 && (y1 - y0) > 5) {
+    rects.push({ x0, y0, x1, y1 });
+    sendValue(rects.map(r => [r.x0, r.y0, r.x1, r.y1]));
+  }
+  draw();
+}
+
+function undo() {
+  rects.pop();
+  sendValue(rects.map(r => [r.x0, r.y0, r.x1, r.y1]));
+  draw();
+}
+function clearAll() {
+  rects = [];
+  sendValue([]);
+  draw();
+}
+
+sendReady();
+</script>
+</body>
+</html>

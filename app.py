@@ -11,12 +11,17 @@ import os
 import glob
 import subprocess
 import io
-import json
 import base64
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image
 import fitz  # PyMuPDF
 from music21 import pitch as m21pitch
+
+# 白塗りキャンバスコンポーネント（ローカル HTML+JS）
+_whitout_canvas = components.v1.declare_component(
+    "whitout_canvas",
+    path=str(Path(__file__).parent / "whitout_component"),
+)
 
 from shamisen_converter import (
     convert_musicxml,
@@ -154,101 +159,53 @@ if is_pdf:
         pix = doc[0].get_pixmap(matrix=fitz.Matrix(scale, scale))
         return pix.tobytes("png")
 
-    def apply_whitout(pdf_bytes: bytes, pct_rects: list) -> bytes:
-        """pct_rects: [(x0%,y0%,x1%,y1%)] → PDF座標に変換して白塗り"""
-        if not pct_rects:
+    def apply_whitout(pdf_bytes: bytes, img_rects: list) -> bytes:
+        """img_rects: [[x0,y0,x1,y1], ...] PNG画素座標(CANVAS_SCALE=1.5) → PDF座標変換して白塗り"""
+        if not img_rects:
             return pdf_bytes
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         for page in doc:
-            pw, ph = page.rect.width, page.rect.height
-            for r in pct_rects:
-                x0 = r[0] / 100 * pw
-                y0 = r[1] / 100 * ph
-                x1 = r[2] / 100 * pw
-                y1 = r[3] / 100 * ph
+            for r in img_rects:
+                # PNG座標 ÷ CANVAS_SCALE = PDF座標(pt)
+                x0, y0, x1, y1 = (v / CANVAS_SCALE for v in r)
                 page.add_redact_annot(fitz.Rect(x0, y0, x1, y1), fill=(1, 1, 1))
             page.apply_redactions()
         return doc.tobytes()
 
-    def preview_whitout(img_png: bytes, pct_rects: list) -> Image.Image:
-        """プレビュー用: PNG に白矩形を描いて返す"""
-        img = Image.open(io.BytesIO(img_png)).convert("RGBA")
-        if pct_rects:
-            overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-            draw = ImageDraw.Draw(overlay)
-            w, h = img.size
-            for r in pct_rects:
-                x0 = int(r[0] / 100 * w)
-                y0 = int(r[1] / 100 * h)
-                x1 = int(r[2] / 100 * w)
-                y1 = int(r[3] / 100 * h)
-                draw.rectangle([x0, y0, x1, y1], fill=(255, 255, 255, 210))
-                draw.rectangle([x0, y0, x1, y1], outline=(255, 68, 68, 255), width=3)
-            img = Image.alpha_composite(img, overlay).convert("RGB")
-        return img
-
-    # ── 白塗りUI ──
+    # ── 白塗りキャンバス ──
     st.subheader("✏️ 白塗り（任意）")
-    st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所を指定")
+    st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所をドラッグで選択")
 
-    img_png  = pdf_to_png(file_bytes)
-    pil_img  = Image.open(io.BytesIO(img_png))
-    img_w, img_h = pil_img.size
+    img_png = pdf_to_png(file_bytes)
+    bg_b64  = base64.b64encode(img_png).decode()
+    bg_url  = f"data:image/png;base64,{bg_b64}"
 
-    rects: list = st.session_state.setdefault("whitout_rects", [])
+    saved_rects = st.session_state.get("whitout_rects", [])
 
-    col_prev, col_ctrl = st.columns([3, 2])
+    # カスタムコンポーネントでマウスドラッグ描画 → rects を返す
+    result = _whitout_canvas(
+        image_src=bg_url,
+        rects=saved_rects,
+        key="wc",
+    )
+    if result is not None:
+        st.session_state.whitout_rects = result
 
-    with col_prev:
-        st.caption("プレビュー（白塗り適用後）")
-        preview_img = preview_whitout(img_png, rects)
-        st.image(preview_img, use_container_width=True)
-
-    with col_ctrl:
-        st.caption("📐 白塗り領域を追加（ページ全体を 0〜100% で指定）")
-
-        # 画像をクリックして座標を取得する補助
-        st.caption(f"ページサイズ参考: {img_w}×{img_h} px（表示用）")
-
-        col_l, col_r = st.columns(2)
-        with col_l:
-            x0_pct = st.number_input("左 %",   0.0, 100.0, 10.0, 1.0, key="wi_x0")
-            y0_pct = st.number_input("上 %",   0.0, 100.0, 10.0, 1.0, key="wi_y0")
-        with col_r:
-            x1_pct = st.number_input("右 %",   0.0, 100.0, 90.0, 1.0, key="wi_x1")
-            y1_pct = st.number_input("下 %",   0.0, 100.0, 20.0, 1.0, key="wi_y1")
-
-        if st.button("➕ 追加", use_container_width=True):
-            if x1_pct > x0_pct and y1_pct > y0_pct:
-                rects.append((x0_pct, y0_pct, x1_pct, y1_pct))
-                st.session_state.whitout_rects = rects
-                st.rerun()
-            else:
-                st.error("右 > 左、下 > 上 になるよう指定してください")
-
-        st.divider()
-
-        if rects:
-            st.caption(f"✅ {len(rects)} 箇所の白塗りを設定中")
-            for i, r in enumerate(rects):
-                c1, c2 = st.columns([4, 1])
-                c1.caption(f"{i+1}. 左{r[0]:.0f}% 上{r[1]:.0f}% 右{r[2]:.0f}% 下{r[3]:.0f}%")
-                if c2.button("✕", key=f"del_{i}"):
-                    rects.pop(i)
-                    st.session_state.whitout_rects = rects
-                    st.rerun()
-            if st.button("🗑 全て削除", use_container_width=True):
-                st.session_state.whitout_rects = []
-                st.rerun()
-        else:
-            st.caption("白塗りなし（そのまま変換）")
+    current_rects = st.session_state.get("whitout_rects", [])
 
     st.divider()
-    if st.button("▶ 変換開始", type="primary", use_container_width=True):
-        processed = apply_whitout(file_bytes, rects)
-        st.session_state.pdf_for_audiveris = processed
-        st.session_state.audiveris_ready   = True
-        st.rerun()
+    col_info, col_btn = st.columns([3, 1])
+    with col_info:
+        if current_rects:
+            st.caption(f"✅ {len(current_rects)} 箇所を白塗り予定")
+        else:
+            st.caption("白塗りなし（そのまま変換）")
+    with col_btn:
+        if st.button("▶ 変換開始", type="primary", use_container_width=True):
+            processed = apply_whitout(file_bytes, current_rects)
+            st.session_state.pdf_for_audiveris = processed
+            st.session_state.audiveris_ready   = True
+            st.rerun()
 
     if not st.session_state.get("audiveris_ready"):
         st.stop()
