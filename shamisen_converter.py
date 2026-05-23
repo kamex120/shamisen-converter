@@ -171,27 +171,8 @@ def convert_musicxml(
                 if sn.warning:
                     result_obj.warnings.append(sn.warning)
 
-    # 1回目の変換
+    # 変換（音域外はそのまま残す。セル3-bで処理方針を選択する）
     _parse_notes(target, result)
-
-    # 音域外が残る場合、全体を1オクターブ上げて再変換
-    out_of_range_count = sum(1 for n in result.notes if n.out_of_range)
-    if out_of_range_count > 0:
-        target_shifted = target.transpose(12)
-        result_shifted = ConversionResult(tuning=tuning)
-        result_shifted.warnings = list(result.warnings)
-        _parse_notes(target_shifted, result_shifted)
-
-        new_oor = sum(1 for n in result_shifted.notes if n.out_of_range)
-        if new_oor < out_of_range_count:
-            # オクターブ上げで改善された場合は採用
-            result.notes = result_shifted.notes
-            result.warnings = result_shifted.warnings
-            result.transpose = 12
-            result.warnings.insert(0,
-                f"⚠️ 音域外が {out_of_range_count} 件あったため、"
-                f"スコア全体を1オクターブ上げて再変換しました（残り音域外: {new_oor} 件）"
-            )
 
     return result
 
