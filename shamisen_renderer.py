@@ -79,7 +79,7 @@ def group_into_measures(notes: list, beats: int = BEATS_PER_MEASURE) -> list:
 def render_note(note: dict, measure_start: float) -> str:
     """1音のHTMLを返す"""
     offset_in = note["offset"] - measure_start
-    left_pct  = offset_in / BEATS_PER_MEASURE * 100
+    left_pct  = 5 + (offset_in / BEATS_PER_MEASURE) * 90
     dur       = note.get("duration", 1.0)
     dur_cls   = duration_class(dur)
 
