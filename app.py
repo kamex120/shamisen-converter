@@ -284,6 +284,227 @@ else:
 
 
 # ===========================
+# MusicXML プレビュー & 再生
+# ===========================
+@st.cache_data(show_spinner="MIDI に変換中...")
+def xml_to_midi_b64(xml_bytes: bytes, fname: str) -> str | None:
+    """MusicXML → MIDI bytes → base64。失敗時は None を返す"""
+    suffix = Path(fname).suffix or ".xml"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(xml_bytes)
+        tmp_path = tmp.name
+    midi_path = tmp_path.replace(suffix, ".mid")
+    try:
+        from music21 import converter as m21conv
+        score = m21conv.parse(tmp_path)
+        score.write("midi", fp=midi_path)
+        with open(midi_path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return None
+    finally:
+        os.unlink(tmp_path)
+        if os.path.exists(midi_path):
+            os.unlink(midi_path)
+
+
+st.divider()
+st.subheader("🎼 MusicXML プレビュー & 再生")
+st.caption("Audiveris の認識結果を確認してください")
+
+xml_b64  = base64.b64encode(xml_source_bytes).decode()
+midi_b64 = xml_to_midi_b64(xml_source_bytes, xml_source_name) or ""
+
+preview_html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: sans-serif; background: #fff; }}
+#controls {{
+  padding: 8px 12px;
+  background: #f8f8f8;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}}
+button {{
+  padding: 5px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  border: 1px solid #aaa;
+  border-radius: 4px;
+  background: #fff;
+}}
+button:hover {{ background: #eee; }}
+button:disabled {{ opacity: 0.4; cursor: default; }}
+#status {{ font-size: 12px; color: #666; }}
+#progress-wrap {{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 200px;
+}}
+#progress {{
+  flex: 1;
+  height: 4px;
+  background: #ddd;
+  border-radius: 2px;
+  overflow: hidden;
+}}
+#progress-bar {{
+  height: 100%;
+  background: #4a90d9;
+  width: 0%;
+  transition: width 0.3s;
+}}
+#time {{ font-size: 11px; color: #888; white-space: nowrap; }}
+#score {{ padding: 8px; overflow-x: auto; }}
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <button id="btnPlay" onclick="togglePlay()" disabled>▶ 再生</button>
+  <button id="btnStop" onclick="stopPlay()" disabled>■ 停止</button>
+  <div id="progress-wrap">
+    <div id="progress"><div id="progress-bar"></div></div>
+    <span id="time">--:--</span>
+  </div>
+  <span id="status">楽譜を読み込み中...</span>
+</div>
+<div id="score"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.5/build/opensheetmusicdisplay.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/midi-player-js@2.0.16/browser/midiplayer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/soundfont-player/dist/soundfont-player.min.js"></script>
+<script>
+const XML_B64  = "{xml_b64}";
+const MIDI_B64 = "{midi_b64}";
+
+// ── 楽譜描画（OSMD）──
+const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay("score", {{
+  backend: "svg",
+  drawTitle: true,
+  drawSubtitle: true,
+  drawComposer: true,
+  autoResize: true,
+}});
+
+function b64ToStr(b64) {{
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}}
+
+osmd.load(b64ToStr(XML_B64)).then(() => {{
+  osmd.render();
+  setStatus("読み込み完了");
+  if (MIDI_B64) initMidi();
+  else setStatus("楽譜表示のみ（MIDI変換失敗）");
+}}).catch(e => {{
+  setStatus("楽譜の読み込みに失敗: " + e.message);
+}});
+
+// ── MIDI 再生（midi-player-js + soundfont-player）──
+let audioCtx = null;
+let instrument = null;
+let player = null;
+let totalTicks = 0;
+
+function getAudioCtx() {{
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}}
+
+async function initMidi() {{
+  setStatus("音源を読み込み中...");
+  try {{
+    instrument = await Soundfont.instrument(getAudioCtx(), "acoustic_grand_piano", {{
+      soundfont: "MusyngKite",
+    }});
+
+    const midiBytes = Uint8Array.from(atob(MIDI_B64), c => c.charCodeAt(0)).buffer;
+    player = new MidiPlayer.Player(onMidiEvent);
+    player.loadArrayBuffer(midiBytes);
+    totalTicks = player.totalTicks || 1;
+
+    player.on("endOfFile", () => {{
+      setPlaying(false);
+      document.getElementById("progress-bar").style.width = "0%";
+      document.getElementById("time").textContent = "00:00";
+    }});
+
+    document.getElementById("btnPlay").disabled = false;
+    document.getElementById("btnStop").disabled = false;
+    setStatus("再生準備完了 ▶");
+  }} catch(e) {{
+    setStatus("音源読み込み失敗: " + e.message);
+  }}
+}}
+
+function onMidiEvent(event) {{
+  if (!instrument) return;
+  if (event.name === "Note on" && event.velocity > 0) {{
+    instrument.play(event.noteName, getAudioCtx().currentTime, {{
+      gain: event.velocity / 100,
+    }});
+  }}
+  // プログレスバー更新
+  if (player && totalTicks) {{
+    const pct = Math.min(100, (player.getCurrentTick() / totalTicks) * 100);
+    document.getElementById("progress-bar").style.width = pct + "%";
+    const sec = player.getSongTime ? player.getSongTime() : 0;
+    document.getElementById("time").textContent = fmtTime(sec);
+  }}
+}}
+
+let playing = false;
+async function togglePlay() {{
+  if (!player) return;
+  if (playing) {{
+    player.pause();
+    setPlaying(false);
+  }} else {{
+    getAudioCtx().resume();
+    player.play();
+    setPlaying(true);
+  }}
+}}
+
+function stopPlay() {{
+  if (!player) return;
+  player.stop();
+  setPlaying(false);
+  document.getElementById("progress-bar").style.width = "0%";
+  document.getElementById("time").textContent = "00:00";
+}}
+
+function setPlaying(b) {{
+  playing = b;
+  document.getElementById("btnPlay").textContent = b ? "⏸ 一時停止" : "▶ 再生";
+}}
+
+function setStatus(msg) {{
+  document.getElementById("status").textContent = msg;
+}}
+
+function fmtTime(sec) {{
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
+}}
+</script>
+</body>
+</html>"""
+
+components.html(preview_html, height=700, scrolling=True)
+
+
+# ===========================
 # Step 1: 解析
 # ===========================
 @st.cache_data(show_spinner="楽譜を解析中...")
