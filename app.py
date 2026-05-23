@@ -1,6 +1,6 @@
 """
 app.py — 三味線文化譜変換 Web アプリ（Streamlit）
-MusicXML → 三味線文化譜 HTML
+PDF / MusicXML → 三味線文化譜 HTML
 """
 
 import streamlit as st
@@ -8,6 +8,8 @@ import streamlit.components.v1 as components
 import yaml
 import tempfile
 import os
+import glob
+import subprocess
 from pathlib import Path
 from music21 import pitch as m21pitch
 
@@ -30,6 +32,13 @@ TUNING_MAP = {
 }
 CANDIDATES = list(range(-12, 13)) + [-24, 24]
 
+AUDIVERIS_URL = (
+    "https://github.com/Audiveris/audiveris/releases/download/"
+    "5.10.2/Audiveris-5.10.2-ubuntu22.04-x86_64.deb"
+)
+AUDIVERIS_EXTRACT = "/tmp/audiveris_app"
+AUDIVERIS_BIN    = f"{AUDIVERIS_EXTRACT}/opt/audiveris/bin/Audiveris"
+
 # ===========================
 # ページ設定
 # ===========================
@@ -40,7 +49,7 @@ st.set_page_config(
 )
 
 st.title("🎵 三味線文化譜変換")
-st.caption("MusicXML → 三味線文化譜（横書き）　※ PDF は MuseScore などで MusicXML に変換してからアップロードしてください")
+st.caption("PDF / MusicXML → 三味線文化譜（横書き）")
 
 # ===========================
 # サイドバー
@@ -54,27 +63,119 @@ with st.sidebar:
     score_author = st.text_input("作者（任意）", placeholder="日本古謡")
 
 # ===========================
+# Audiveris セットアップ（初回のみ）
+# ===========================
+@st.cache_resource(show_spinner=False)
+def setup_audiveris() -> str | None:
+    """Audiveris を /tmp に展開して実行パスを返す（セッション内で1回だけ実行）"""
+    if os.path.isfile(AUDIVERIS_BIN):
+        return AUDIVERIS_BIN
+
+    os.makedirs(AUDIVERIS_EXTRACT, exist_ok=True)
+    deb_path = "/tmp/audiveris.deb"
+
+    try:
+        subprocess.run(
+            ["wget", "-q", "--show-progress", AUDIVERIS_URL, "-O", deb_path],
+            check=True, timeout=300,
+        )
+        subprocess.run(
+            ["dpkg-deb", "--extract", deb_path, AUDIVERIS_EXTRACT],
+            check=True,
+        )
+        os.remove(deb_path)
+        os.chmod(AUDIVERIS_BIN, 0o755)
+        return AUDIVERIS_BIN
+    except Exception as e:
+        return None
+
+
+# ===========================
+# Audiveris で PDF → MusicXML
+# ===========================
+@st.cache_data(show_spinner="Audiveris で楽譜認識中（1〜2分）...")
+def run_audiveris(pdf_bytes: bytes, fname: str, bin_path: str):
+    """PDF を Audiveris で MusicXML に変換。(xml_bytes, error_msg) を返す"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(pdf_bytes)
+        pdf_path = tmp.name
+
+    omr_dir = tempfile.mkdtemp()
+    try:
+        proc = subprocess.run(
+            ["xvfb-run", bin_path, "-batch", "-export",
+             "-output", omr_dir, "--", pdf_path],
+            capture_output=True, text=True, timeout=180,
+        )
+        found = (
+            glob.glob(f"{omr_dir}/**/*.mxl", recursive=True)
+            + glob.glob(f"{omr_dir}/**/*.xml", recursive=True)
+        )
+        if not found:
+            return None, proc.stderr[-500:] or "MusicXML が生成されませんでした"
+        with open(found[0], "rb") as f:
+            return f.read(), None
+    except subprocess.TimeoutExpired:
+        return None, "Audiveris がタイムアウトしました（180秒）"
+    except Exception as e:
+        return None, str(e)
+    finally:
+        os.unlink(pdf_path)
+
+
+# ===========================
 # ファイルアップロード
 # ===========================
-uploaded = st.file_uploader("MusicXML ファイル (.xml / .mxl)", type=["xml", "mxl"])
+uploaded = st.file_uploader(
+    "楽譜ファイル (.pdf / .xml / .mxl)",
+    type=["pdf", "xml", "mxl"],
+)
 
 if not uploaded:
     st.info(
-        "👆 MusicXML ファイルをアップロードしてください。\n\n"
-        "**PDF → MusicXML の変換方法:**\n"
-        "- [MuseScore](https://musescore.org/) で楽譜を開き「ファイル → エクスポート → MusicXML」\n"
-        "- Finale / Dorico / Sibelius のエクスポート機能を使用"
+        "👆 楽譜ファイルをアップロードしてください。\n\n"
+        "- **PDF**: 印刷用楽譜をそのままアップロード（Audiveris で自動認識）\n"
+        "- **MusicXML**: MuseScore・Finale などで書き出したファイル"
     )
     st.stop()
 
 file_bytes = uploaded.read()
+is_pdf = uploaded.name.lower().endswith(".pdf")
+
+# ===========================
+# PDF の場合 → Audiveris で変換
+# ===========================
+if is_pdf:
+    with st.status("Audiveris をセットアップ中...", expanded=True) as status:
+        st.write("初回起動時のみ Audiveris をダウンロードします（約 2 分）")
+        bin_path = setup_audiveris()
+        if not bin_path:
+            st.error("Audiveris のセットアップに失敗しました")
+            st.stop()
+        status.update(label="楽譜を認識中...", state="running")
+        xml_bytes, err = run_audiveris(file_bytes, uploaded.name, bin_path)
+        if err:
+            status.update(label="認識失敗", state="error")
+            st.error(f"Audiveris エラー: {err}")
+            st.stop()
+        status.update(label="認識完了 ✅", state="complete")
+
+    # xml_bytes を一時ファイルに書き出して以降の処理に使う
+    _xml_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mxl")
+    _xml_tmp.write(xml_bytes)
+    _xml_tmp.close()
+    xml_source_bytes = xml_bytes
+    xml_source_name  = uploaded.name.replace(".pdf", ".mxl")
+else:
+    xml_source_bytes = file_bytes
+    xml_source_name  = uploaded.name
+
 
 # ===========================
 # Step 1: 解析（キャッシュ）
 # ===========================
 @st.cache_data(show_spinner="楽譜を解析中...")
 def parse_notes(fb: bytes, fname: str, tuning: str):
-    """MusicXML を変換して音符情報（辞書リスト）を返す"""
     suffix = Path(fname).suffix or ".xml"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(fb)
@@ -96,7 +197,7 @@ def parse_notes(fb: bytes, fname: str, tuning: str):
     return notes, list(result.warnings)
 
 
-note_list, init_warnings = parse_notes(file_bytes, uploaded.name, tuning)
+note_list, init_warnings = parse_notes(xml_source_bytes, xml_source_name, tuning)
 
 real_notes = [n for n in note_list if n["note_name"] != "rest" and n["midi"] != -1]
 oor_count  = sum(1 for n in real_notes if n["out_of_range"])
@@ -112,8 +213,10 @@ col2.metric("音域外", oor_count, delta=f"-{oor_count}" if oor_count else None
 mapping_  = load_mapping(MAPPING_PATH)
 midi_map_ = build_midi_to_position(mapping_, tuning)
 
+
 def count_oor(shift: int) -> int:
     return sum(1 for n in real_notes if (n["midi"] + shift) not in midi_map_)
+
 
 shift = 0
 if oor_count > 0:
@@ -172,7 +275,10 @@ def make_html(fb: bytes, fname: str, tuning: str,
     return render_html(data, title=title, attribution=author)
 
 
-html = make_html(file_bytes, uploaded.name, tuning, shift, score_title, score_author)
+html = make_html(
+    xml_source_bytes, xml_source_name,
+    tuning, shift, score_title, score_author,
+)
 
 # ===========================
 # Step 4: プレビュー & ダウンロード
