@@ -5,13 +5,13 @@ PDF / MusicXML → 三味線文化譜 HTML
 
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_drawable_canvas import st_canvas
 import yaml
 import tempfile
 import os
 import glob
 import subprocess
 import io
+import json
 import base64
 from pathlib import Path
 from PIL import Image
@@ -77,9 +77,10 @@ is_pdf = uploaded.name.lower().endswith(".pdf")
 # ファイルが変わったらセッションをリセット
 file_id = f"{uploaded.name}_{len(file_bytes)}"
 if st.session_state.get("_file_id") != file_id:
-    st.session_state._file_id        = file_id
-    st.session_state.audiveris_ready  = False
+    st.session_state._file_id          = file_id
+    st.session_state.audiveris_ready   = False
     st.session_state.pdf_for_audiveris = None
+    st.session_state.whitout_rects     = []
 
 
 # ===========================
@@ -169,39 +170,167 @@ if is_pdf:
             page.apply_redactions()
         return doc.tobytes()
 
-    # ── 白塗りキャンバス ──
+    # ── 白塗りキャンバス（自前 HTML+JS）──
     st.subheader("✏️ 白塗り（任意）")
     st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所をドラッグで選択")
 
-    img_png   = pdf_to_png(file_bytes)
-    canvas_bg = Image.open(io.BytesIO(img_png))
-    bg_b64    = base64.b64encode(img_png).decode()
-    bg_url    = f"data:image/png;base64,{bg_b64}"
+    img_png    = pdf_to_png(file_bytes)
+    pil_img    = Image.open(io.BytesIO(img_png))
+    img_w      = pil_img.width
+    img_h      = pil_img.height
+    bg_b64     = base64.b64encode(img_png).decode()
 
-    canvas_result = st_canvas(
-        background_image=bg_url,
-        drawing_mode="rect",
-        fill_color="rgba(255, 255, 255, 0.65)",
-        stroke_color="#FF4444",
-        stroke_width=2,
-        height=canvas_bg.height,
-        width=canvas_bg.width,
-        key="whitout_canvas",
-    )
+    # session_state から既存矩形を取得
+    saved_rects_json = json.dumps(st.session_state.get("whitout_rects", []))
 
-    # キャンバスから矩形を取得
-    current_rects = []
-    if canvas_result.json_data:
-        for obj in canvas_result.json_data.get("objects", []):
-            if obj.get("type") == "rect":
-                sx = obj.get("scaleX", 1)
-                sy = obj.get("scaleY", 1)
-                x0 = obj["left"] / CANVAS_SCALE
-                y0 = obj["top"]  / CANVAS_SCALE
-                x1 = (obj["left"] + obj["width"]  * sx) / CANVAS_SCALE
-                y1 = (obj["top"]  + obj["height"] * sy) / CANVAS_SCALE
-                if (x1 - x0) > 3 and (y1 - y0) > 3:
-                    current_rects.append((x0, y0, x1, y1))
+    canvas_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {{ margin:0; padding:0; background:#f0f0f0; }}
+  #wrap {{ position:relative; display:inline-block; }}
+  #bg {{ display:block; max-width:100%; }}
+  #cv {{ position:absolute; top:0; left:0; cursor:crosshair; }}
+  #toolbar {{ background:#fff; padding:6px 10px; font-family:sans-serif;
+              font-size:13px; display:flex; gap:8px; align-items:center; }}
+  button {{ padding:4px 12px; cursor:pointer; border:1px solid #ccc;
+            border-radius:4px; background:#fff; }}
+  button.danger {{ border-color:#c00; color:#c00; }}
+  #info {{ color:#555; }}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button onclick="clearAll()">🗑 全消去</button>
+  <button onclick="undoLast()">↩ 一つ戻す</button>
+  <span id="info">ドラッグで白塗り範囲を選択</span>
+</div>
+<div id="wrap">
+  <img id="bg" src="data:image/png;base64,{bg_b64}" />
+  <canvas id="cv"></canvas>
+</div>
+<script>
+const IMG_W = {img_w};
+const IMG_H = {img_h};
+const SCALE = {CANVAS_SCALE};
+
+const bg = document.getElementById('bg');
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const info = document.getElementById('info');
+
+let rects = {saved_rects_json};  // [[x0,y0,x1,y1], ...] in PDF coords
+let dragging = false, sx=0, sy=0, ex=0, ey=0;
+
+function scaleF() {{
+  return bg.getBoundingClientRect().width / IMG_W;
+}}
+
+function resize() {{
+  const r = bg.getBoundingClientRect();
+  cv.width  = r.width;
+  cv.height = r.height;
+  draw();
+}}
+
+function draw() {{
+  const sf = scaleF();
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  rects.forEach(r => {{
+    const x = r[0]*SCALE*sf, y = r[1]*SCALE*sf;
+    const w = (r[2]-r[0])*SCALE*sf, h = (r[3]-r[1])*SCALE*sf;
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#FF4444';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+  }});
+  if (dragging) {{
+    const x = Math.min(sx,ex), y = Math.min(sy,ey);
+    const w = Math.abs(ex-sx), h = Math.abs(ey-sy);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillRect(x,y,w,h);
+    ctx.strokeStyle = '#FF4444';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x,y,w,h);
+  }}
+  info.textContent = rects.length > 0
+    ? `✅ ${{rects.length}} 箇所を白塗り予定`
+    : 'ドラッグで白塗り範囲を選択';
+}}
+
+function canvasXY(e) {{
+  const rect = cv.getBoundingClientRect();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return [clientX - rect.left, clientY - rect.top];
+}}
+
+cv.addEventListener('mousedown', e => {{
+  [sx, sy] = canvasXY(e); ex=sx; ey=sy; dragging=true;
+}});
+cv.addEventListener('mousemove', e => {{
+  if (!dragging) return;
+  [ex, ey] = canvasXY(e); draw();
+}});
+cv.addEventListener('mouseup', e => {{
+  if (!dragging) return;
+  dragging = false;
+  [ex, ey] = canvasXY(e);
+  const sf = scaleF();
+  const x0 = Math.min(sx,ex)/(SCALE*sf);
+  const y0 = Math.min(sy,ey)/(SCALE*sf);
+  const x1 = Math.max(sx,ex)/(SCALE*sf);
+  const y1 = Math.max(sy,ey)/(SCALE*sf);
+  if ((x1-x0)>3 && (y1-y0)>3) {{
+    rects.push([x0,y0,x1,y1]);
+    sendRects();
+  }}
+  draw();
+}});
+
+function clearAll() {{ rects=[]; sendRects(); draw(); }}
+function undoLast() {{ rects.pop(); sendRects(); draw(); }}
+
+function sendRects() {{
+  window.parent.postMessage({{
+    type: 'streamlit:setComponentValue',
+    value: JSON.stringify(rects)
+  }}, '*');
+}}
+
+new ResizeObserver(resize).observe(bg);
+bg.onload = resize;
+if (bg.complete) resize();
+</script>
+</body>
+</html>
+"""
+
+    result_raw = components.html(canvas_html, height=img_h // 2 + 60, scrolling=True)
+
+    # postMessage 経由では値が取れないため、矩形はセッション経由で管理
+    # → 代替: テキストエリアで JSON を受け取るフォームを追加
+    with st.expander("🔧 白塗り座標（上のキャンバスで描いた後、ここに貼り付けてください）", expanded=False):
+        st.caption("キャンバスで描いた矩形は自動送信されます。手動入力も可能です。")
+        rect_json = st.text_area(
+            "矩形リスト（JSON）",
+            value=json.dumps(st.session_state.get("whitout_rects", []), ensure_ascii=False),
+            height=80,
+            key="rect_json_input",
+            placeholder='例: [[100, 200, 400, 250]]',
+        )
+        if st.button("矩形を更新"):
+            try:
+                parsed = json.loads(rect_json)
+                st.session_state.whitout_rects = parsed
+                st.rerun()
+            except Exception:
+                st.error("JSON の形式が正しくありません")
+
+    current_rects = st.session_state.get("whitout_rects", [])
 
     col_info, col_btn = st.columns([3, 1])
     with col_info:
