@@ -14,7 +14,7 @@ import io
 import json
 import base64
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw
 import fitz  # PyMuPDF
 from music21 import pitch as m21pitch
 
@@ -80,7 +80,7 @@ if st.session_state.get("_file_id") != file_id:
     st.session_state._file_id          = file_id
     st.session_state.audiveris_ready   = False
     st.session_state.pdf_for_audiveris = None
-    st.session_state.whitout_rects     = []
+    st.session_state.whitout_rects     = []   # [(x0%,y0%,x1%,y1%), ...]
 
 
 # ===========================
@@ -88,19 +88,15 @@ if st.session_state.get("_file_id") != file_id:
 # ===========================
 @st.cache_resource(show_spinner=False)
 def setup_audiveris() -> tuple:
-    """Audiveris を /tmp に展開。(bin_path, error_msg) を返す"""
     if os.path.isfile(AUDIVERIS_BIN):
         return AUDIVERIS_BIN, None
-
     os.makedirs(AUDIVERIS_EXTRACT, exist_ok=True)
     deb_path = "/tmp/audiveris.deb"
-
     try:
         import urllib.request
         urllib.request.urlretrieve(AUDIVERIS_URL, deb_path)
     except Exception as e:
         return None, f"ダウンロード失敗: {e}"
-
     try:
         r = subprocess.run(
             ["dpkg-deb", "--extract", deb_path, AUDIVERIS_EXTRACT],
@@ -113,11 +109,9 @@ def setup_audiveris() -> tuple:
     finally:
         if os.path.exists(deb_path):
             os.remove(deb_path)
-
     if not os.path.isfile(AUDIVERIS_BIN):
         found = glob.glob(f"{AUDIVERIS_EXTRACT}/**/Audiveris", recursive=True)
         return None, f"バイナリが見つかりません: {found or AUDIVERIS_EXTRACT}"
-
     os.chmod(AUDIVERIS_BIN, 0o755)
     return AUDIVERIS_BIN, None
 
@@ -160,196 +154,106 @@ if is_pdf:
         pix = doc[0].get_pixmap(matrix=fitz.Matrix(scale, scale))
         return pix.tobytes("png")
 
-    def apply_whitout(pdf_bytes: bytes, rects: list) -> bytes:
-        if not rects:
+    def apply_whitout(pdf_bytes: bytes, pct_rects: list) -> bytes:
+        """pct_rects: [(x0%,y0%,x1%,y1%)] → PDF座標に変換して白塗り"""
+        if not pct_rects:
             return pdf_bytes
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         for page in doc:
-            for r in rects:
-                page.add_redact_annot(fitz.Rect(*r), fill=(1, 1, 1))
+            pw, ph = page.rect.width, page.rect.height
+            for r in pct_rects:
+                x0 = r[0] / 100 * pw
+                y0 = r[1] / 100 * ph
+                x1 = r[2] / 100 * pw
+                y1 = r[3] / 100 * ph
+                page.add_redact_annot(fitz.Rect(x0, y0, x1, y1), fill=(1, 1, 1))
             page.apply_redactions()
         return doc.tobytes()
 
-    # ── 白塗りキャンバス（自前 HTML+JS）──
+    def preview_whitout(img_png: bytes, pct_rects: list) -> Image.Image:
+        """プレビュー用: PNG に白矩形を描いて返す"""
+        img = Image.open(io.BytesIO(img_png)).convert("RGBA")
+        if pct_rects:
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay)
+            w, h = img.size
+            for r in pct_rects:
+                x0 = int(r[0] / 100 * w)
+                y0 = int(r[1] / 100 * h)
+                x1 = int(r[2] / 100 * w)
+                y1 = int(r[3] / 100 * h)
+                draw.rectangle([x0, y0, x1, y1], fill=(255, 255, 255, 210))
+                draw.rectangle([x0, y0, x1, y1], outline=(255, 68, 68, 255), width=3)
+            img = Image.alpha_composite(img, overlay).convert("RGB")
+        return img
+
+    # ── 白塗りUI ──
     st.subheader("✏️ 白塗り（任意）")
-    st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所をドラッグで選択")
+    st.caption("コード名・歌詞など Audiveris が誤認識しそうな箇所を指定")
 
-    img_png    = pdf_to_png(file_bytes)
-    pil_img    = Image.open(io.BytesIO(img_png))
-    img_w      = pil_img.width
-    img_h      = pil_img.height
-    bg_b64     = base64.b64encode(img_png).decode()
+    img_png  = pdf_to_png(file_bytes)
+    pil_img  = Image.open(io.BytesIO(img_png))
+    img_w, img_h = pil_img.size
 
-    # session_state から既存矩形を取得
-    saved_rects_json = json.dumps(st.session_state.get("whitout_rects", []))
+    rects: list = st.session_state.setdefault("whitout_rects", [])
 
-    canvas_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  body {{ margin:0; padding:0; background:#f0f0f0; }}
-  #wrap {{ position:relative; display:inline-block; }}
-  #bg {{ display:block; max-width:100%; }}
-  #cv {{ position:absolute; top:0; left:0; cursor:crosshair; }}
-  #toolbar {{ background:#fff; padding:6px 10px; font-family:sans-serif;
-              font-size:13px; display:flex; gap:8px; align-items:center; }}
-  button {{ padding:4px 12px; cursor:pointer; border:1px solid #ccc;
-            border-radius:4px; background:#fff; }}
-  button.danger {{ border-color:#c00; color:#c00; }}
-  #info {{ color:#555; }}
-</style>
-</head>
-<body>
-<div id="toolbar">
-  <button onclick="clearAll()">🗑 全消去</button>
-  <button onclick="undoLast()">↩ 一つ戻す</button>
-  <span id="info">ドラッグで白塗り範囲を選択</span>
-</div>
-<div id="wrap">
-  <img id="bg" src="data:image/png;base64,{bg_b64}" />
-  <canvas id="cv"></canvas>
-</div>
-<script>
-const IMG_W = {img_w};
-const IMG_H = {img_h};
-const SCALE = {CANVAS_SCALE};
+    col_prev, col_ctrl = st.columns([3, 2])
 
-const bg = document.getElementById('bg');
-const cv = document.getElementById('cv');
-const ctx = cv.getContext('2d');
-const info = document.getElementById('info');
+    with col_prev:
+        st.caption("プレビュー（白塗り適用後）")
+        preview_img = preview_whitout(img_png, rects)
+        st.image(preview_img, use_container_width=True)
 
-let rects = {saved_rects_json};  // [[x0,y0,x1,y1], ...] in PDF coords
-let dragging = false, sx=0, sy=0, ex=0, ey=0;
+    with col_ctrl:
+        st.caption("📐 白塗り領域を追加（ページ全体を 0〜100% で指定）")
 
-function scaleF() {{
-  return bg.getBoundingClientRect().width / IMG_W;
-}}
+        # 画像をクリックして座標を取得する補助
+        st.caption(f"ページサイズ参考: {img_w}×{img_h} px（表示用）")
 
-function resize() {{
-  const r = bg.getBoundingClientRect();
-  cv.width  = r.width;
-  cv.height = r.height;
-  draw();
-}}
+        col_l, col_r = st.columns(2)
+        with col_l:
+            x0_pct = st.number_input("左 %",   0.0, 100.0, 10.0, 1.0, key="wi_x0")
+            y0_pct = st.number_input("上 %",   0.0, 100.0, 10.0, 1.0, key="wi_y0")
+        with col_r:
+            x1_pct = st.number_input("右 %",   0.0, 100.0, 90.0, 1.0, key="wi_x1")
+            y1_pct = st.number_input("下 %",   0.0, 100.0, 20.0, 1.0, key="wi_y1")
 
-function draw() {{
-  const sf = scaleF();
-  ctx.clearRect(0, 0, cv.width, cv.height);
-  rects.forEach(r => {{
-    const x = r[0]*SCALE*sf, y = r[1]*SCALE*sf;
-    const w = (r[2]-r[0])*SCALE*sf, h = (r[3]-r[1])*SCALE*sf;
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#FF4444';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, w, h);
-  }});
-  if (dragging) {{
-    const x = Math.min(sx,ex), y = Math.min(sy,ey);
-    const w = Math.abs(ex-sx), h = Math.abs(ey-sy);
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillRect(x,y,w,h);
-    ctx.strokeStyle = '#FF4444';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x,y,w,h);
-  }}
-  info.textContent = rects.length > 0
-    ? `✅ ${{rects.length}} 箇所を白塗り予定`
-    : 'ドラッグで白塗り範囲を選択';
-}}
-
-function canvasXY(e) {{
-  const rect = cv.getBoundingClientRect();
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-  return [clientX - rect.left, clientY - rect.top];
-}}
-
-cv.addEventListener('mousedown', e => {{
-  [sx, sy] = canvasXY(e); ex=sx; ey=sy; dragging=true;
-}});
-cv.addEventListener('mousemove', e => {{
-  if (!dragging) return;
-  [ex, ey] = canvasXY(e); draw();
-}});
-cv.addEventListener('mouseup', e => {{
-  if (!dragging) return;
-  dragging = false;
-  [ex, ey] = canvasXY(e);
-  const sf = scaleF();
-  const x0 = Math.min(sx,ex)/(SCALE*sf);
-  const y0 = Math.min(sy,ey)/(SCALE*sf);
-  const x1 = Math.max(sx,ex)/(SCALE*sf);
-  const y1 = Math.max(sy,ey)/(SCALE*sf);
-  if ((x1-x0)>3 && (y1-y0)>3) {{
-    rects.push([x0,y0,x1,y1]);
-    sendRects();
-  }}
-  draw();
-}});
-
-function clearAll() {{ rects=[]; sendRects(); draw(); }}
-function undoLast() {{ rects.pop(); sendRects(); draw(); }}
-
-function sendRects() {{
-  window.parent.postMessage({{
-    type: 'streamlit:setComponentValue',
-    value: JSON.stringify(rects)
-  }}, '*');
-}}
-
-new ResizeObserver(resize).observe(bg);
-bg.onload = resize;
-if (bg.complete) resize();
-</script>
-</body>
-</html>
-"""
-
-    result_raw = components.html(canvas_html, height=img_h // 2 + 60, scrolling=True)
-
-    # postMessage 経由では値が取れないため、矩形はセッション経由で管理
-    # → 代替: テキストエリアで JSON を受け取るフォームを追加
-    with st.expander("🔧 白塗り座標（上のキャンバスで描いた後、ここに貼り付けてください）", expanded=False):
-        st.caption("キャンバスで描いた矩形は自動送信されます。手動入力も可能です。")
-        rect_json = st.text_area(
-            "矩形リスト（JSON）",
-            value=json.dumps(st.session_state.get("whitout_rects", []), ensure_ascii=False),
-            height=80,
-            key="rect_json_input",
-            placeholder='例: [[100, 200, 400, 250]]',
-        )
-        if st.button("矩形を更新"):
-            try:
-                parsed = json.loads(rect_json)
-                st.session_state.whitout_rects = parsed
+        if st.button("➕ 追加", use_container_width=True):
+            if x1_pct > x0_pct and y1_pct > y0_pct:
+                rects.append((x0_pct, y0_pct, x1_pct, y1_pct))
+                st.session_state.whitout_rects = rects
                 st.rerun()
-            except Exception:
-                st.error("JSON の形式が正しくありません")
+            else:
+                st.error("右 > 左、下 > 上 になるよう指定してください")
 
-    current_rects = st.session_state.get("whitout_rects", [])
+        st.divider()
 
-    col_info, col_btn = st.columns([3, 1])
-    with col_info:
-        if current_rects:
-            st.caption(f"✅ {len(current_rects)} 箇所を白塗り予定")
+        if rects:
+            st.caption(f"✅ {len(rects)} 箇所の白塗りを設定中")
+            for i, r in enumerate(rects):
+                c1, c2 = st.columns([4, 1])
+                c1.caption(f"{i+1}. 左{r[0]:.0f}% 上{r[1]:.0f}% 右{r[2]:.0f}% 下{r[3]:.0f}%")
+                if c2.button("✕", key=f"del_{i}"):
+                    rects.pop(i)
+                    st.session_state.whitout_rects = rects
+                    st.rerun()
+            if st.button("🗑 全て削除", use_container_width=True):
+                st.session_state.whitout_rects = []
+                st.rerun()
         else:
             st.caption("白塗りなし（そのまま変換）")
-    with col_btn:
-        if st.button("▶ 変換開始", type="primary", use_container_width=True):
-            processed = apply_whitout(file_bytes, current_rects)
-            st.session_state.pdf_for_audiveris = processed
-            st.session_state.audiveris_ready   = True
-            st.rerun()
+
+    st.divider()
+    if st.button("▶ 変換開始", type="primary", use_container_width=True):
+        processed = apply_whitout(file_bytes, rects)
+        st.session_state.pdf_for_audiveris = processed
+        st.session_state.audiveris_ready   = True
+        st.rerun()
 
     if not st.session_state.get("audiveris_ready"):
         st.stop()
 
     # ── Audiveris 実行 ──
-    st.divider()
     with st.status("Audiveris をセットアップ中...", expanded=True) as status:
         st.write("初回起動時のみ Audiveris をダウンロードします（約 2 分）")
         bin_path, setup_err = setup_audiveris()
