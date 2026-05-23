@@ -318,8 +318,25 @@ else:
 # ===========================
 # MusicXML プレビュー & 再生
 # ===========================
+import zipfile
+
+def unwrap_mxl(data: bytes, fname: str) -> bytes:
+    """MXL (ZIP圧縮) なら内部の .xml を取り出す。XML なら そのまま返す"""
+    if not fname.lower().endswith(".mxl"):
+        return data
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            # container.xml 以外の .xml を探す（スコア本体）
+            for name in sorted(z.namelist()):
+                if name.endswith(".xml") and "META-INF" not in name:
+                    return z.read(name)
+    except Exception:
+        pass
+    return data  # 展開失敗時はそのまま
+
+
 @st.cache_data(show_spinner="MIDI に変換中...")
-def xml_to_midi_b64(xml_bytes: bytes, fname: str) -> str | None:
+def xml_to_midi_b64(xml_bytes: bytes, fname: str):
     """MusicXML → MIDI bytes → base64。失敗時は None を返す"""
     suffix = Path(fname).suffix or ".xml"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -344,8 +361,10 @@ st.divider()
 st.subheader("🎼 MusicXML プレビュー & 再生")
 st.caption("Audiveris の認識結果を確認してください")
 
-xml_b64  = base64.b64encode(xml_source_bytes).decode()
-midi_b64 = xml_to_midi_b64(xml_source_bytes, xml_source_name) or ""
+# MXL は ZIP 展開して生の XML を OSMD に渡す
+xml_for_osmd   = unwrap_mxl(xml_source_bytes, xml_source_name)
+xml_b64        = base64.b64encode(xml_for_osmd).decode()
+midi_b64       = xml_to_midi_b64(xml_source_bytes, xml_source_name) or ""
 
 preview_html = f"""<!DOCTYPE html>
 <html lang="ja">
